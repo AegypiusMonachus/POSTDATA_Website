@@ -1,0 +1,11 @@
+certifi==2019.11.28
+chardet==3.0.4
+idna==2.9
+lxml==4.4.3
+mysqlclient==1.4.6
+psutil==5.7.0
+PySocks==1.7.1
+requests==2.23.0
+tencentcloud-sdk-python==3.0.156
+urllib3==1.25.8
+wincertstore==0.2

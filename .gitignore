@@ -1,0 +1,5 @@
+.idea/
+TEST/
+__pycache__/
+send_articles_env/
+www_reddit_com_test/
