@@ -8,7 +8,8 @@ import time
 import requests
 from requests.adapters import HTTPAdapter
 
-from project_utils.project_util import generate_login_data, ip_proxy, get_new_article, MysqlHandler, generate_random_string
+from project_utils.project_util import generate_login_data, ip_proxy, get_new_article, MysqlHandler, \
+    generate_random_string, get_new_title_and_link, get_Session
 from project_utils import g_var
 
 def generate_headers(signal, loginData = None):
@@ -49,11 +50,9 @@ def generate_headers(signal, loginData = None):
             'content-type': 'application/json;charset=UTF-8',
             'origin': 'https://www.indiegogo.com',
             'referer': 'https://www.indiegogo.com/individuals/' + str(loginData["id"]) + '/edit',
-            'cookie': loginData["cookie"],
             'user_agent': user_agent,
             'x-csrf-token': loginData["token"],
         }
-
     return headers
 
 def generate_register_data():
@@ -76,9 +75,12 @@ def generate_register_data():
             'source': None
         }
         registerData['account'] = account
-    except:
+    except Exception as e:
+        g_var.ERR_CODE = 5000
+        g_var.ERR_MSG = "注册数据生成中出现异常..."
         g_var.logger.info("注册数据生成中出现异常...")
-        return -1
+        g_var.logger.info(e)
+        return -2
     return registerData
 
 # 获取csrf
@@ -86,15 +88,51 @@ def get_csrf(Session, header=None):
     try:
         url = 'https://www.indiegogo.com'
         res = Session.get(url, timeout=g_var.TIMEOUT)
+        if res == -1:
+            return res
         csrf = re.findall('<meta name="csrf-token" content="(.*?)" />', res.text)
         if not csrf:
             g_var.logger.info("未获取到x-csrf-token...")
-            return -1
+            return -2
         return csrf[0]
     except:
+        g_var.ERR_CODE = 5000
+        g_var.ERR_MSG = "获取x-csrf-token出现异常..."
         g_var.logger.info("获取x-csrf-token出现异常...")
-        return -1
+        return -2
 
+# 发送链接数据
+def get_put_data(loginData):
+    try:
+        data_url = []
+        for i in range(20):
+            title_and_link = get_new_title_and_link()
+            new_data = {"title": title_and_link[0][:10], "link": title_and_link[1]}
+            data_url.append(new_data)
+        put_data = {
+            "profile": {
+                "state": None,
+                "firstname": loginData['firstname'],
+                "lastname": loginData['lastname'],
+                "country": None,
+                "city": None,
+                "zipcode": None,
+                "tagline": None,
+                "description_html": None,
+                "facebook_url": None,
+                "youtube_url": None,
+                "imdb_url": None,
+                "website_url": None,
+                "twitter_url": None,
+                "links": data_url,
+            }
+        }
+    except Exception as e:
+        g_var.logger.info(e)
+        g_var.ERR_CODE = 5000
+        g_var.ERR_MSG = g_var.ERR_MSG + "|_|" + "获取个人资料页数据出现异常。。。"
+        return -2
+    return put_data
 
 class IndiegogoCom(object):
     def __init__(self, assignment_num):
@@ -120,51 +158,55 @@ class IndiegogoCom(object):
         if headers == -1:
             g_var.logger.info("获取注册headers失败...")
             return -1
-
         csrf_token = get_csrf(Session, headers)
-        g_var.logger.info(csrf_token)
         if csrf_token == -1:
-            g_var.logger.info("获取x-csrf-token失败...")
             return -1
+        elif csrf_token == -2:
+            return -2
 
         del headers["Host"]
         del headers["Accept"]
         headers["accept"] = "application/json"
         headers["x-csrf-token"] = csrf_token
-
         registerData = generate_register_data()
-        g_var.logger.info(registerData)
-        if registerData == -1:
+        if registerData == -2:
             g_var.logger.info("未生成正确注册数据...")
-            return -1
+            return -2
         url_register = 'https://www.indiegogo.com/accounts.json'
-        try:
-            g_var.logger.info("提交注册中...")
-            html = Session.post(url_register, json=registerData, headers=headers, timeout=g_var.TIMEOUT)
-            self.proxy_err_count = 0
-        except:
-            g_var.logger.error("提交注册信息超时")
-            self.proxy_err_count = self.proxy_err_count + 1
-            return -1
-
+        g_var.logger.info("提交注册中...")
+        html = Session.post(url_register, json=registerData, headers=headers, timeout=g_var.TIMEOUT)
+        if html == -1:
+            return html
         # 注册成功与否验证
-        g_var.logger.info(html.status_code)
-        g_var.logger.info(html.text)
         if html.status_code not in [200, 201]:
-            g_var.logger.info("IP被封等原因...")
-            return -1
+            g_var.logger.info(html.status_code)
+            return -2
 
-        success_user = json.loads(html.content)
-        sql = "INSERT INTO indiegogo_com(id, firstname, lastname, password, mail) VALUES('" + str(success_user['account']['id']) + \
-              "', '" + success_user['account']['first_name'] + "', '" + success_user['account']['first_name'] + "', '" + \
-              registerData['account']['password'] + "', '" + success_user['account']['email'] + "');"
-        last_row_id = MysqlHandler().insert(sql)
-        if last_row_id != -1:
-            registerData["user_id"] = last_row_id
-            return registerData
-        else:
+        try:
+            cookie = str(html.cookies.get_dict())
+            success_user = json.loads(html.content)
+            sql = "INSERT INTO indiegogo_com(id, firstname, lastname, password, mail) VALUES('" + str(success_user['account']['id']) + \
+                  "', '" + success_user['account']['first_name'] + "', '" + success_user['account']['last_name'] + "', '" + \
+                  registerData['account']['password'] + "', '" + success_user['account']['email'] + "');"
+            last_row_id = MysqlHandler().insert(sql)
+            userData = {}
+            if last_row_id != -1:
+                userData["id"] = last_row_id
+                userData["firstname"] = success_user['account']['first_name']
+                userData["lastname"] = success_user['account']['last_name']
+                userData["cookie"] = cookie
+                return userData
+            else:
+                g_var.ERR_CODE = 2004
+                g_var.ERR_MSG = "数据库插入失败..."
+                g_var.logger.error("数据库插入失败")
+                return 0
+        except Exception as e:
+            g_var.logger.info(e)
+            g_var.ERR_CODE = 2004
+            g_var.ERR_MSG = "数据库插入失败..."
             g_var.logger.error("数据库插入失败")
-            return -1
+            return 0
 
     def __login(self, Session, VPN, userInfo):
         g_var.logger.info("login...")
@@ -174,7 +216,6 @@ class IndiegogoCom(object):
             return -1
 
         csrf_token = get_csrf(Session)
-        g_var.logger.info(csrf_token)
         if csrf_token == -1:
             g_var.logger.info("获取x-csrf-token失败...")
             return -1
@@ -187,157 +228,75 @@ class IndiegogoCom(object):
                 'password': userInfo[3],
             }
         }
-        retry_count = 0
-        while retry_count < g_var.RETRY_COUNT_MAX:
-            retry_count = retry_count + 1
-            url_login = 'https://www.indiegogo.com/accounts/sign_in.json'
-            try:
-                g_var.logger.info("使用账号密码登录...")
-                headers = generate_headers(0)
-                if headers == -1:
-                    return -1
-                html = Session.post(url_login, headers=headers, json=data_user, timeout=g_var.TIMEOUT)
-                self.proxy_err_count = 0
-                break
-            except:
-                g_var.logger.error("账号密码登录超时")
-                self.proxy_err_count = self.proxy_err_count + 1
-                time.sleep(g_var.SLEEP_TIME)
-                proxies = ip_proxy(VPN)
-                Session.proxies = proxies
-                continue
-        if retry_count == g_var.RETRY_COUNT_MAX:
-            g_var.SPIDER_STATUS = 3
-            g_var.logger.error("连续登录失败！程序停止")
+        g_var.logger.info("使用账号密码登录...")
+        html = Session.post(url_login, headers=headers, json=data_user, timeout=g_var.TIMEOUT)
+        if html == -1:
             return -1
 
-        if 'set-cookie' not in html.headers:
+        if 'account' not in json.loads(html.text).keys():
             # 如果登录失败将数据库中的status改为异常
             sql = "UPDATE indiegogo_com SET status=1 WHERE id=" + str(user_id) + ";"
             MysqlHandler().update(sql)
+            g_var.ERR_CODE = 2003
+            g_var.ERR_MSG = "用户无法使用..."
             return 1  # 账号异常，重新取号登录
-        cookie = html.headers['set-cookie']
-        pattern = '(_session_id=.*?);'
-        cookie = re.findall(pattern, cookie)
+        cookie = str(html.cookies.get_dict())
         g_var.logger.info(cookie)
-        if len(cookie) != 2:
-            # 如果登录失败将数据库中的status改为异常
-            sql = "UPDATE indiegogo_com SET status=1 WHERE id=" + str(user_id) + ";"
-            MysqlHandler().update(sql)
-            return 1  # 账号异常，重新取号登录
-        # 如果登录成功，则返回数据
         loginSuccessData = {
             'id': user_id,
             'firstname': userInfo[1],
             'lastname': userInfo[2],
-            'cookie': cookie[-1],
+            'cookie': cookie,
         }
         return loginSuccessData
 
-    def __personal_data(self, Session, loginData):
+    def __personal_data(self, Session, loginData, VPN):
         g_var.logger.info("personal data...")
         headers = generate_headers(2)
         if headers == -1:
             g_var.logger.info("获取登录headers失败...")
             return -1
-        headers['cookie'] = loginData['cookie']
-        g_var.logger.info(headers)
 
-        retry_count = 0
-        while retry_count < g_var.RETRY_COUNT_MAX:
-            retry_count = retry_count + 1
-            url_personal_data = 'https://www.indiegogo.com/individuals/'+str(loginData["id"])+'/edit'
-            g_var.logger.info(url_personal_data)
-            try:
-                g_var.logger.info("正在获取个人资料页数据...")
-                html = requests.get(url_personal_data, headers=headers, timeout=g_var.TIMEOUT)
-                self.proxy_err_count = 0
-                break
-            except:
-                g_var.logger.error("获取个人资料页数据超时...")
-                self.proxy_err_count = self.proxy_err_count + 1
-                time.sleep(g_var.SLEEP_TIME)
-                proxies = ip_proxy(VPN)
-                Session.proxies = proxies
-                continue
-        if retry_count == g_var.RETRY_COUNT_MAX:
-            g_var.SPIDER_STATUS = 3
-            g_var.logger.error("连续获取数据失败！程序停止")
-            return -1
+        g_var.logger.info("正在获取个人资料页数据...")
+        url_personal_data = 'https://www.indiegogo.com/individuals/' + str(loginData["id"]) + '/edit'
+        html = requests.get(url_personal_data, cookies=eval(loginData['cookie']), headers=headers, timeout=g_var.TIMEOUT)
+        if html == -1:
+            return html
 
         prove = 'Sign up or Log in | Indiegogo'
         if prove in html.text:
-            g_var.logger.info('个人资料页打开失败...')
-            return -1
-        g_var.logger.info('...data...')
-        g_var.logger.info(html.status_code)
+            g_var.logger.info(html.status_code)
+            return -2
         res_token = re.findall('name="csrf-token" content="(.*?)"', html.text)
-        g_var.logger.info(res_token)
         if res_token == []:
-            # 获取个人资料页数据失败
-            return -1  # 重新获取
-
+            g_var.logger.info(html.status_code)
+            return -2
         return res_token[0]
 
-    def __postMessage(self, Session, loginData, personalData):
+    def __postMessage(self, Session, loginData, personalData, VPN):
         g_var.logger.info("send link...")
         loginData['token'] = personalData
         headers = generate_headers(3, loginData)
-        g_var.logger.info(headers)
         if headers == -1:
             g_var.logger.info("获取登录headers失败...")
             return -1
 
-        data_url = []
-        new_data = {"title": "python", "link": "http://www.jq22.com/textDifference"}
-        data_url.append(new_data)
-        put_data = {
-            "profile": {
-                "state": None,
-                "firstname": loginData['firstname'],
-                "lastname": loginData['lastname'],
-                "country": None,
-                "city": None,
-                "zipcode": None,
-                "tagline": None,
-                "description_html": None,
-                "facebook_url": None,
-                "youtube_url": None,
-                "imdb_url": None,
-                "website_url": None,
-                "twitter_url": None,
-                "links": data_url,
-            }
-        }
-        g_var.logger.info(put_data)
-        retry_count = 0
-        while retry_count < g_var.RETRY_COUNT_MAX:
-            retry_count = retry_count + 1
-            url_sendLink = 'https://www.indiegogo.com/private_api/profiles/'+ str(loginData['id'])
-            g_var.logger.info(url_sendLink)
-            try:
-                g_var.logger.info("正在发送个人链接...")
-                html = Session.put(url_sendLink, json=put_data, headers=headers, timeout=g_var.TIMEOUT)
-                self.proxy_err_count = 0
-                break
-            except:
-                g_var.logger.error("发送个人链接超时...")
-                self.proxy_err_count = self.proxy_err_count + 1
-                time.sleep(g_var.SLEEP_TIME)
-                proxies = ip_proxy(VPN)
-                Session.proxies = proxies
-                continue
-        if retry_count == g_var.RETRY_COUNT_MAX:
-            g_var.SPIDER_STATUS = 3
-            g_var.logger.error("连续登录失败！程序停止")
+        put_data = get_put_data(loginData)
+        if put_data == -2:
+            g_var.logger.info("获取链接数据失败...")
+            return -2
+
+        g_var.logger.info("正在发送个人链接...")
+        url_sendLink = 'https://www.indiegogo.com/private_api/profiles/' + str(loginData['id'])
+        html = Session.put(url_sendLink, json=put_data, cookies=eval(loginData['cookie']), headers=headers, timeout=g_var.TIMEOUT)
+        if html == -1:
             return -1
 
-        g_var.logger.info(html.status_code)
-        g_var.logger.info(html.text)
         if html.status_code == 200:
-            g_var.logger.info("链接发送成功！" + loginData["name"])
+            g_var.logger.info("链接发送成功！" + loginData["firstname"])
             # 将链接、用户存入indiegogo_com_article表
-            sql = "INSERT INTO indiegogo_com_article(url, user_id) VALUES('" + link + "', '" + str(loginData['id']) + "');"
+            url = 'https://www.indiegogo.com/individuals/' + str(loginData['id'])
+            sql = "INSERT INTO indiegogo_com_article(url, user_id) VALUES('" + url + "', '" + str(loginData['id']) + "');"
             if g_var.insert_article_lock.acquire():
                 last_row_id = MysqlHandler().insert(sql)
                 g_var.insert_article_lock.release()
@@ -345,13 +304,13 @@ class IndiegogoCom(object):
                 g_var.logger.info("insert article OK")
             else:
                 g_var.logger.error("数据库插入链接错误!")
-                return 1
-            return 0
+                return 0
+            return loginData
         else:
-            g_var.logger.error("链接发送失败！\n" + html.text)
+            g_var.logger.error("链接发送失败！\n" + html.status_code)
             g_var.ERR_CODE = 5000
             g_var.ERR_MSG = g_var.ERR_MSG + "|_|" + "链接发送失败，未知错误!"
-            return 1
+            return 0
 
     def registers(self, present_website, VPN):
         while self.success_count < self.assignment_num:
@@ -359,18 +318,10 @@ class IndiegogoCom(object):
             if self.__monitor_status() == -1:
                 break
             self.now_count = self.now_count + 1
-
-            Session = requests.Session()
-            # 获取代理设置
-            proxies = ip_proxy(VPN)
-            if proxies == {"error": -1}:
+            Session = get_Session(VPN)
+            if Session == -1:
                 self.failed_count = self.failed_count + 1
                 continue
-            self.failed_count = 0
-            Session.proxies = proxies
-            # 设置最大重试次数
-            Session.mount('http://', HTTPAdapter(max_retries=1))
-            Session.mount('https://', HTTPAdapter(max_retries=1))
 
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
@@ -404,15 +355,10 @@ class IndiegogoCom(object):
                 break
             self.now_count = self.now_count + 1
 
-            Session = requests.Session()
-            # 获取代理设置
-            proxies = ip_proxy(VPN)
-            if proxies == {"error": -1}:
+            Session = get_Session(VPN)
+            if Session == -1:
                 self.failed_count = self.failed_count + 1
                 continue
-            Session.proxies = proxies
-            Session.mount('http://', HTTPAdapter(max_retries=1))
-            Session.mount('https://', HTTPAdapter(max_retries=1))
 
             userInfo = generate_login_data(present_website)
             if userInfo == None:
@@ -518,124 +464,95 @@ class IndiegogoCom(object):
                 break
             self.now_count = self.now_count + 1
             # 设置Session对象
-            Session = requests.Session()
-            proxies = ip_proxy(VPN)
-            if proxies == {"error": -1}:
+            Session = get_Session(VPN)
+            if Session == -1:
                 self.failed_count = self.failed_count + 1
                 continue
-            Session.proxies = proxies
-            Session.mount('http://', HTTPAdapter(max_retries=1))
-            Session.mount('https://', HTTPAdapter(max_retries=1))
 
             # 1、注册
             retry_count = 0
+            register_signal = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
-                registerData = self.__register_one(Session, present_website)
-
-                if registerData != -1:     # 说明注册成功
+                userData = self.__register_one(Session, present_website)
+                if userData == -1:
+                    # 失败更换代理
+                    g_var.ERR_CODE = 3003
+                    g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
+                    g_var.logger.info("代理错误")
+                    retry_count = g_var.RETRY_COUNT_MAX
+                elif userData == -2:
+                    # 注册过程中出现失败！
+                    g_var.logger.info("注册过程中出现失败！")
+                    continue
+                elif userData == 0:
+                    # 注册成功，但存库失败
+                    g_var.logger.info("注册成功,但存库失败！")
+                    register_signal = 1
                     break
                 else:
-                    # 失败更换代理
-                    g_var.logger.info("注册失败" + str(registerData))
-                    time.sleep(g_var.SLEEP_TIME)
-                    proxies = ip_proxy(VPN)
-                    Session.proxies = proxies
-                    continue
+                    # 说明注册成功
+                    self.failed_count = 0
+                    break
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
+                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续注册出错，程序停止"
                 g_var.logger.error("start:连续注册失败！程序停止")
                 break
 
-            # 2、登录
+            if register_signal == 1:
+                continue
+
+            # 2、获取个人数据
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
-                g_var.logger.info(registerData)
-                # 构造一个userInfo
-                userInfo = (registerData['user_id'], registerData['account']['firstname'], registerData['account']['lastname'],
-                            registerData['account']['password'], registerData['account']['email'])
-
-                loginData = self.__login(Session, VPN, userInfo)
-                if loginData == -1:
-                    # 登录报错，停止运行
-                    g_var.ERR_MSG = "登录出错"
-                    self.failed_count = self.failed_count + 1
-                    time.sleep(g_var.SLEEP_TIME)
-                    proxies = ip_proxy(VPN)
-                    Session.proxies = proxies
-                    continue
-                elif loginData == 1:
-                    # 账号异常，重新取新账号登录
-                    self.failed_count = self.failed_count + 1
-                    continue
-                else:
-                    self.failed_count = 0
-                    self.proxy_err_count = 0
-                    break
-            if retry_count == g_var.RETRY_COUNT_MAX:
-                g_var.SPIDER_STATUS = 3
-                g_var.logger.error("start:连续登录失败！程序停止")
-                break
-
-            # 3、获取个人数据
-            retry_count = 0
-            personal_signal = 0
-            while retry_count < g_var.RETRY_COUNT_MAX:
-                retry_count = retry_count + 1
-                personalData = self.__personal_data(Session, loginData)
+                personalData = self.__personal_data(Session, userData, VPN)
                 if personalData == -1:
-                    g_var.ERR_MSG = "个人数据获取出错"
-                    self.failed_count = self.failed_count + 1
-                    time.sleep(g_var.SLEEP_TIME)
-                    proxies = ip_proxy(VPN)
-                    Session.proxies = proxies
+                    g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
+                    g_var.logger.info("代理错误")
+                    retry_count = g_var.RETRY_COUNT_MAX
+                elif personalData == -2:
+                    # 获取用户资料过程中出现失败！
+                    g_var.logger.info("获取用户资料过程中出现失败！")
                     continue
-                elif personalData == 1:
-                    # 账号异常，重新取新账号登录
-                    self.failed_count = self.failed_count + 1
-                    personal_signal = 1
-                    break
                 else:
                     self.failed_count = 0
-                    self.proxy_err_count = 0
                     break
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
-                g_var.ERR_MSG = "连续登录出错，程序停止"
+                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续注册出错，程序停止"
                 g_var.logger.error("login:连续登录失败！程序停止")
                 break
 
-            if personal_signal == 1:
-                continue
-
-            # 4、发文章
+            # 3、发链接
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
-                status = self.__postMessage(Session, loginData)
-                if status == 0:  # 发文章成功
-                    self.success_count = self.success_count + 1
-                    self.failed_count = 0
-                    self.proxy_err_count = 0
+                status = self.__postMessage(Session, userData, personalData, VPN)
+                if status == -1:
+                    g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
+                    g_var.logger.info("代理错误")
+                    retry_count = g_var.RETRY_COUNT_MAX
+                elif status == -2:
+                    # 发送链接数据过程中出现失败！
+                    g_var.logger.info("发送链接数据过程中出现失败！")
+                    continue
+                elif status == 0:
+                    # 链接数据存库失败
+                    g_var.logger.info("注册成功,但存库失败！")
+                    register_signal = 1
                     break
-                elif status == 1:
-                    self.failed_count = self.failed_count + 1
-                    self.proxy_err_count = self.proxy_err_count + 1
-                    time.sleep(g_var.SLEEP_TIME)
-                    proxies = ip_proxy(VPN)
-                    Session.proxies = proxies
-                    # g_var.logger.info("proxies"+str(proxies))
-                elif status == -1:
-                    # 获取不到文章，程序停止
-                    self.failed_count = self.failed_count + 1
+                else:
+                    self.success_count += 1
+                    self.failed_count = 0
                     break
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
-                g_var.ERR_MSG = "连续发文章出错，程序停止"
-                g_var.logger.error("连续发文章出错，程序停止")
+                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续注册出错，程序停止"
+                g_var.logger.error("连续发链接出错，程序停止")
                 break
-        g_var.logger.info("成功注册账户并发送文章" + str(self.success_count) + "篇")        
+        g_var.logger.info("成功注册账户并发送链接" + str(self.success_count) + "个。")

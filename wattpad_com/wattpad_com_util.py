@@ -9,9 +9,10 @@ import imaplib
 from email.header import Header
 
 import requests
+from project_utils import requestsW
 from requests.adapters import HTTPAdapter
 
-from project_utils.project_util import generate_login_data, ip_proxy, MysqlHandler, get_email, generate_random_string, get_new_link
+from project_utils.project_util import generate_login_data, ip_proxy, MysqlHandler, get_email, generate_random_string, get_new_link, get_Session
 from project_utils import g_var
 
 
@@ -46,7 +47,7 @@ def generate_headers(signal, loginData = None):
             'User-Agent': user_agent,
             'Content-Type': 'application/json',
             'Origin': 'https://www.wattpad.com',
-            'Referer': 'https://www.wattpad.com/user/' + loginData['name'],
+            'Referer': 'https://www.wattpad.com/user/' + loginData['username'],
             'X-Requested-With': 'XMLHttpRequest',
             'Authorization': 'IwKhVmNM7VXhnsVb0BabhS',
             'Cookie': 'token=' + loginData['token'],
@@ -95,8 +96,9 @@ class MyEmail(object):
         msgFirstTen = []
         if len(msgList) <= 10:
             msgFirstTen = msgList
+            msgFirstTen.reverse()
         else:
-            msgFirstTen = msgList[:-11:-1]
+            msgFirstTen = msgList[-1:-11:-1]
         msgLen = len(msgFirstTen)
         i = 0
         for eachEmail in msgFirstTen:
@@ -130,9 +132,12 @@ class MyEmail(object):
                     # print('附件名:', fname)
                 else:
                     # 文本内容
-                    res = part.get_payload(decode=True)  # 解码出文本内容，直接输出来就可以了。
-                    res = res.decode(encoding='utf-8')
-                    res_text += res
+                    try:
+                        res = part.get_payload(decode=True)  # 解码出文本内容，直接输出来就可以了。
+                        res = res.decode(encoding='utf-8')
+                        res_text += res
+                    except:
+                        pass
 
         result = re.findall('This is me!: (.*?)\n', res_text)
         if result:
@@ -223,76 +228,64 @@ class WattpadCom(object):
             return -1
         return 0
 
-    def __register_one(self, Session, present_website):
+    def __register_one(self, present_website, email_info):
 
         g_var.logger.info("register...")
+        headers = generate_headers(0)
         if headers == -1:
             g_var.logger.info("获取注册headers失败...")
-            return -1
-
-        email_info = get_email(present_website)
-        g_var.logger.info(email_info)
-        if email_info == -1:
-            g_var.logger.info("获取邮箱号失败...")
-            return -1
+            return -2
 
         registerData = generate_register_data(present_website, email_info)
         g_var.logger.info(registerData)
         if registerData == -1:
-            g_var.logger.info("未获取到可用邮箱号或生成正确注册数据...")
-            return -1
+            g_var.logger.info("未生成正确注册数据...")
+            return -2
 
         url_register = 'https://www.wattpad.com/signup?nextUrl=/home'
-        try:
-            g_var.logger.info("提交注册中...")
-            html = Session.post(url_register, data=registerData, headers=headers, timeout=g_var.TIMEOUT).text
-            self.proxy_err_count = 0
-        except Exception as e:
-            g_var.logger.info(e)
-            g_var.logger.error("提交注册信息超时")
-            self.proxy_err_count = self.proxy_err_count + 1
+        g_var.logger.info("提交注册中...")
+        html = requestsW.post(url_register, proxies=ip_proxy("en"), data=registerData, headers=headers, timeout=g_var.TIMEOUT)
+        if html == -1:
             return -1
-
         # 注册成功与否验证
         prove_info = 'Hi @'+registerData['username']
-        if prove_info not in html:
-            self.failed_count += 1
-            g_var.logger.info(html)
-            g_var.logger.info("邮箱名已注册或者IP被封等原因...")
-            return -1
-
+        if prove_info not in html.text:
+            g_var.logger.info(html.text)
+            g_var.logger.info("IP被封等原因...")
+            return -2
+        token_list = re.findall('token=(.*?);', html.headers['Set-Cookie'])
         del headers['Origin']
         del headers['Content-Type']
         del headers['Referer']
-        time.sleep(5)
+        time.sleep(2)
         verify_url = get_verify_url(email_info)
         if verify_url == -1:
             g_var.logger.info("未读取到邮箱验证的url...")
-            return -1
-        try:
-            g_var.logger.info("邮件的url正在验证中...")
-            html = Session.get(url=verify_url, headers=headers, timeout=g_var.TIMEOUT)
-            self.proxy_err_count = 0
-        except:
-            g_var.logger.error("邮件的url验证超时...")
-            self.proxy_err_count = self.proxy_err_count + 1
+            return -3
+        g_var.logger.info("邮件的url正在验证中...")
+        html = requestsW.get(url=verify_url, proxies=ip_proxy("en"), headers=headers, timeout=g_var.TIMEOUT)
+        if html == -1:
             return -1
         if html.status_code == 200:
             sql = "INSERT INTO wattpad_com(username, password, mail, status) VALUES('" + registerData['username'] + \
                   "', '" + registerData['password'] + "', '" + registerData['email'] + "', '" + str(0) + "');"
             last_row_id = MysqlHandler().insert(sql)
             if last_row_id != -1:
-                registerData["user_id"] = last_row_id
+                registerData["id"] = last_row_id
+                registerData["token"] = token_list[0]
                 return registerData
             else:
-                g_var.logger.error("数据库插入失败")
-                return -1
+                g_var.ERR_CODE = 2004
+                g_var.ERR_MSG = "数据库插入用户注册数据失败..."
+                g_var.logger.error("数据库插入用户注册数据失败...")
+                return 0
         else:
-            self.failed_count += 1
+            g_var.ERR_CODE = 3006
+            g_var.ERR_MSG = "邮箱验证失败..."
             g_var.logger.error("邮箱验证失败！\n")
-            return -1
+            return -3
 
-    def __login(self, Session, VPN, userInfo):
+    def __login(self, VPN, userInfo):
         # 使用账号密码登录
         user_id = userInfo[0]
         username = userInfo[1]
@@ -336,12 +329,12 @@ class WattpadCom(object):
         # 如果登录成功，则返回token_list和username给下一步发新文章
         loginSuccessData = {
             'id': user_id,
-            'name': loginData['username'],
+            'username': loginData['username'],
             'token': token_list[0],
         }
         return loginSuccessData
 
-    def __postMessage(self, Session, loginData):
+    def __postMessage(self, loginData):
 
         headers = generate_headers(1, loginData)
         if headers == -1:
@@ -352,19 +345,15 @@ class WattpadCom(object):
             g_var.SPIDER_STATUS = 3
             return -1
 
-        url_putLink = 'https://www.wattpad.com/api/v3/users/' + loginData['name']
-        linkData = {
-            'website': link,
-        }
-        try:
-            g_var.logger.info("发送链接中...")
-            html = Session.put(url_putLink, headers=headers, json=linkData, timeout=g_var.TIMEOUT)
-        except:
-            g_var.logger.error("发链接超时!")
-            return 1
+        url_putLink = 'https://www.wattpad.com/api/v3/users/' + loginData['username']
+        linkData = {'website': link,}
+        g_var.logger.info("发送链接中...")
+        html = requestsW.put(url_putLink, proxies=ip_proxy("en"), headers=headers, json=linkData, timeout=g_var.TIMEOUT)
+        if html == -1:
+            return html
         if html.status_code == 200:
-            g_var.logger.info("链接发送成功！" + loginData["name"])
-            url = 'https://www.wattpad.com/user/' + loginData["name"]
+            g_var.logger.info("链接发送成功！" + loginData["username"])
+            url = 'https://www.wattpad.com/user/' + loginData["username"]
             # 将链接、用户存入wattpad_com_article表
             sql = "INSERT INTO wattpad_com_article(url, user_id) VALUES('" + url + "', '"  + str(loginData['id']) + "');"
             if g_var.insert_article_lock.acquire():
@@ -374,13 +363,13 @@ class WattpadCom(object):
                 g_var.logger.info("insert article OK")
             else:
                 g_var.logger.error("数据库插入链接错误!")
-                return 1
-            return 0
+                return 0
+            return linkData
         else:
-            g_var.logger.error("链接发送失败！\n" + html)
+            g_var.logger.error("链接发送失败！\n" + html.status_code)
             g_var.ERR_CODE = 5000
             g_var.ERR_MSG = g_var.ERR_MSG + "|_|" + "链接发送失败，未知错误!"
-            return 1
+            return 0
 
     def registers(self, present_website, VPN):
         while self.success_count < self.assignment_num:
@@ -389,37 +378,22 @@ class WattpadCom(object):
                 break
             self.now_count = self.now_count + 1
 
-            Session = requests.Session()
-            # 获取代理设置
-            proxies = ip_proxy(VPN)
-            if proxies == {"error": -1}:
-                self.failed_count = self.failed_count + 1
-                continue
-            self.failed_count = 0
-            Session.proxies = proxies
-            # 设置最大重试次数
-            Session.mount('http://', HTTPAdapter(max_retries=1))
-            Session.mount('https://', HTTPAdapter(max_retries=1))
-
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
-                g_var.logger.info('in register......')
                 retry_count = retry_count + 1
-                registerData = self.__register_one(Session, present_website)
-                if registerData != -1:
+                registerData = self.__register_one(present_website)
+                if registerData == -1:
+                    g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
+                    g_var.logger.info("代理错误")
+                    retry_count = g_var.RETRY_COUNT_MAX
+                else:
                     self.success_count = self.success_count + 1
                     self.failed_count = 0
                     break
-                else:
-                    self.failed_count = self.failed_count + 1
-                    proxies = ip_proxy(VPN)
-                    Session.proxies = proxies
-                    time.sleep(g_var.SLEEP_TIME)
-                    continue
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
-                g_var.ERR_MSG = "连续注册出错，程序停止"
+                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续注册出错，程序停止"
                 g_var.logger.error("register:连续注册失败！程序停止")
                 break
 
@@ -433,16 +407,6 @@ class WattpadCom(object):
                 break
             self.now_count = self.now_count + 1
 
-            Session = requests.Session()
-            # 获取代理设置
-            proxies = ip_proxy(VPN)
-            if proxies == {"error": -1}:
-                self.failed_count = self.failed_count + 1
-                continue
-            Session.proxies = proxies
-            Session.mount('http://', HTTPAdapter(max_retries=1))
-            Session.mount('https://', HTTPAdapter(max_retries=1))
-
             # 1、登录
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
@@ -455,7 +419,7 @@ class WattpadCom(object):
                     g_var.logger.error("数据库中获取用户失败，本线程停止！")
                     return {"error": -1}
                 else:
-                    loginData = self.__login(Session, VPN, userInfo)
+                    loginData = self.__login(VPN, userInfo)
                     if loginData == -1:
                         # 登录报错，停止运行\
                         g_var.logger.error("登录出错，更换代理。。。")
@@ -476,7 +440,7 @@ class WattpadCom(object):
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
-                g_var.ERR_MSG = "连续登录出错，程序停止"
+                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续注册出错，程序停止"
                 g_var.logger.error("login:连续登录失败！程序停止")
                 break
 
@@ -484,7 +448,7 @@ class WattpadCom(object):
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
-                status = self.__postMessage(Session, loginData)
+                status = self.__postMessage(loginData)
                 if status == 0:  # 发链接成功
                     self.success_count = self.success_count + 1
                     self.failed_count = 0
@@ -515,91 +479,75 @@ class WattpadCom(object):
             if self.__monitor_status() == -1:
                 break
             self.now_count = self.now_count + 1
-            # 设置Session对象
-            Session = requests.Session()
-            proxies = ip_proxy(VPN)
-            if proxies == {"error": -1}:
+
+            email_info = get_email(present_website)
+            g_var.logger.info(email_info)
+            if email_info == -1:
                 self.failed_count = self.failed_count + 1
                 continue
-            Session.proxies = proxies
-            Session.mount('http://', HTTPAdapter(max_retries=1))
-            Session.mount('https://', HTTPAdapter(max_retries=1))
-
             # 1、注册
             retry_count = 0
+            register_signal = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
-                registerData = self.__register_one(Session, present_website)
-
-                if registerData != -1:     # 说明注册成功
-                    self.failed_count = 0
-                    break
-                else:
+                registerData = self.__register_one(present_website, email_info)
+                if registerData == -1:
                     # 失败更换代理
-                    g_var.logger.info("注册失败" + str(registerData))
-                    time.sleep(g_var.SLEEP_TIME)
-                    proxies = ip_proxy(VPN)
-                    Session.proxies = proxies
-                    self.failed_count = self.failed_count + 1
+                    g_var.ERR_CODE = 3003
+                    g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
+                    g_var.logger.info("代理错误")
+                    retry_count = g_var.RETRY_COUNT_MAX
+                elif registerData == -2:
+                    # 注册过程中出现失败！
+                    g_var.logger.info("注册过程中出现失败！")
                     continue
-            if retry_count == g_var.RETRY_COUNT_MAX:
-                # 连续出错说明发生了一些问题，需要停止程序
-                g_var.SPIDER_STATUS = 3
-                g_var.logger.error("start:连续注册失败！程序停止")
-                break
-
-            # 2、登录
-            retry_count = 0
-            while retry_count < g_var.RETRY_COUNT_MAX:
-                retry_count = retry_count + 1
-                # 构造一个userInfo
-                userInfo = (registerData['user_id'], registerData['username'], registerData['password'])
-                loginData = self.__login(Session, VPN, userInfo)
-                if loginData == -1:
-                    # 登录报错，停止运行
-                    g_var.ERR_MSG = "登录出错"
-                    self.failed_count = self.failed_count + 1
-                    time.sleep(g_var.SLEEP_TIME)
-                    proxies = ip_proxy(VPN)
-                    Session.proxies = proxies
-                    continue
-                elif loginData == 1:
-                    # 账号异常，重新取新账号登录
-                    self.failed_count = self.failed_count + 1
-                    continue
+                elif registerData == -3:
+                    # 注册成功,但邮箱失败！
+                    g_var.logger.info("注册成功,但邮箱失败！")
+                    register_signal = 1
+                    break
+                elif registerData == 0:
+                    # 注册成功，但存库失败
+                    g_var.logger.info("注册成功,但存库失败！")
+                    register_signal = 1
+                    break
                 else:
+                    # 说明注册成功
                     self.failed_count = 0
-                    self.proxy_err_count = 0
                     break
+                self.failed_count += 1
             if retry_count == g_var.RETRY_COUNT_MAX:
+                # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
-                g_var.logger.error("start:连续登录失败！程序停止")
+                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续注册出错，程序停止"
+                g_var.logger.error("register:连续注册失败！程序停止")
                 break
 
-            # 3、发链接
+            if register_signal == 1:
+                continue
+
+            # 2、发链接
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
-                status = self.__postMessage(Session, loginData)
-                if status == 0:  # 发链接成功
-                    self.success_count = self.success_count + 1
+                status = self.__postMessage(registerData)
+                if status == -1:
+                    g_var.ERR_CODE = 3003
+                    g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
+                    g_var.logger.info("代理错误")
+                    retry_count = g_var.RETRY_COUNT_MAX
+                elif status == 0:
+                    # 链接数据存库失败
+                    sself.failed_count = self.failed_count + 1
+                    continue
+                else:  # 发链接成功
+                    self.success_count += 1
                     self.failed_count = 0
-                    self.proxy_err_count = 0
-                    break
-                elif status == 1:
-                    self.failed_count = self.failed_count + 1
-                    self.proxy_err_count = self.proxy_err_count + 1
-                    time.sleep(g_var.SLEEP_TIME)
-                    proxies = ip_proxy(VPN)
-                    Session.proxies = proxies
-                elif status == -1:
-                    # 获取不到链接，程序停止
-                    self.failed_count = self.failed_count + 1
                     break
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
-                g_var.ERR_MSG = "连续发链接出错，程序停止"
+                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续注册出错，程序停止"
                 g_var.logger.error("连续发链接出错，程序停止")
                 break
         g_var.logger.info("成功注册账户并发送链接" + str(self.success_count) + "个。")

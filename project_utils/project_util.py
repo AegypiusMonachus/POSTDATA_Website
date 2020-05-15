@@ -1,5 +1,7 @@
+import email
 import json
 import random
+import re
 import sys
 import threading
 import time
@@ -14,6 +16,7 @@ import logging
 from logging import handlers
 
 from project_utils import g_var
+from project_utils import requestsW
 
 
 # @#$ 2、本文件定义整个大项目可能用到的通用的函数
@@ -127,6 +130,157 @@ class MysqlHandler(object):
         self.dbinsert.close()
 
 
+class EmailVerify(object):
+    """
+    邮箱验证，从注册邮箱中获取链接，访问链接，激活邮箱
+    初始化后调用execute_Start  错:返回 -1 更换邮箱
+    """
+
+    def __init__(self, username, password, re_text):
+        """
+        :param username: 邮箱账号
+        :param password: 邮箱密码
+        :param re_text: 获取参数正则
+        """
+        self.username = username
+        self.password = password
+        self.re_text = re_text
+        self.server = imaplib.IMAP4_SSL(host='imap-mail.outlook.com', port="993")
+        self.server.login(username, password)
+        self.inbox_unread = 0
+        self.junk_unread = 0
+
+    def get_mail(self, filename):
+        # 邮箱中的文件夹，默认为'INBOX'
+        inbox = self.server.select(filename)
+        # 搜索匹配的邮件，第一个参数是字符集，None默认就是ASCII编码，第二个参数是查询条件，这里的ALL就是查找全部
+        typ, data = self.server.search(None, "ALL")
+        # 邮件列表,使用空格分割得到邮件索引
+        msgList = data[0].split()
+        # 最新邮件，第0封邮件为最早的一封邮件
+        msgFirstTen = []
+        if len(msgList) <= 10:
+            msgFirstTen = msgList[::-1]
+        else:
+            msgFirstTen = msgList[-1:-11:-1]
+        msgLen = len(msgFirstTen)
+        i = 0
+        for eachEmail in msgFirstTen:
+            i += 1
+            typ, datas = self.server.fetch(eachEmail, '(RFC822)')
+            text = datas[0][1]
+            texts = str(text, errors='replace')
+            message = email.message_from_string(texts)
+            result = self.parseBody(message)
+            if result:
+                return result
+            if i == msgLen:
+                return ''
+
+    def parseBody(self,message):
+        """ 解析邮件/信体 """
+        # 循环信件中的每一个mime的数据块
+        res_text = ''
+        for part in message.walk():
+            # 这里要判断是否是multipart，是的话，里面的数据是一个message 列表
+            if not part.is_multipart():
+                charset = part.get_charset()
+                contenttype = part.get_content_type()
+                name = part.get_param("name")  # 如果是附件，这里就会取出附件的文件名
+                if name:
+                    return ''
+                    # 下面的三行代码只是为了解码象=?gbk?Q?=CF=E0=C6=AC.rar?=这样的文件名
+                    # fh = email.header.Header(name)
+                    # fdh = email.header.decode_header(fh)
+                    # fname = dh[0][0]
+                    # print('附件名:', fname)
+                else:
+                    # 文本内容
+                    res = part.get_payload(decode=True)  # 解码出文本内容，直接输出来就可以了。
+                    try:
+                        res = res.decode(encoding='utf-8')
+                    except:
+                        return ""
+                    res_text += res
+        result = re.findall(self.re_text, res_text)
+        if result:
+            return result[0]
+        else:
+            return ''
+
+    def UnseenEmailCount(self):
+        try:
+            inbox_x, inbox_y = self.server.status('INBOX', '(MESSAGES UNSEEN)')
+            junk_x, junk_y = self.server.status('junk', '(MESSAGES UNSEEN)')
+            inbox_unseen = int(re.search('UNSEEN\s+(\d+)', str(inbox_y[0])).group(1))
+            junk_unseen = int(re.search('UNSEEN\s+(\d+)', str(junk_y[0])).group(1))
+            filename_list = []
+            if self.inbox_unread == inbox_unseen and self.junk_unread == junk_unseen:
+                self.inbox_unread = inbox_unseen
+                self.junk_unread = junk_unseen
+                return 0, 0, filename_list
+            if self.junk_unread < junk_unseen:
+                self.junk_unread = junk_unseen
+                filename_list.append('junk')
+            if self.inbox_unread < inbox_unseen:
+                self.inbox_unread = inbox_unseen
+                filename_list.append('INBOX')
+            return inbox_unseen, junk_unseen, filename_list
+        except:
+            return 0, 0, []
+
+    def Start(self):
+        result = {}
+        inbox_unseen, junk_unseen, filename_list = self.UnseenEmailCount()
+        if inbox_unseen == 0 and junk_unseen == 0 and filename_list == []:
+            result['msg'] = 'Read Failed'
+            result['data'] = ''
+            return result
+        else:
+            for i in filename_list:
+                filename = i
+                print(filename)
+                msg=self.get_mail(filename)
+                if msg:
+                    result['msg'] = 'Read Successfully'
+                    result['data'] = msg
+                    return result
+        return {'data': '', 'msg': 'Read Failed'}
+
+
+    def execute_Start(self):
+        read_times = 0
+        while read_times<60:
+            res = self.Start()
+            if "data" in res:
+                if res['data']:
+                    return res
+            read_times += 1
+            time.sleep(2)
+        g_var.logger.info("正在检查邮箱%s,user:%s,pwd:%s" % (read_times, self.username, self.password))
+        return -1
+
+
+def account_activation(Session, email_verify_obj):
+    """
+    注册成功后去邮箱激活账户
+    Args:
+        email_and_passwd：邮箱账户和密码的列表，email_and_passwd[0]表示邮箱，[1]表示密码
+        email_verify_obj：邮箱验证对象
+    Returns:
+        未收到激活邮件返回-1
+        收到返回激活邮件中的激活链接verify_url
+    """
+    res_email = email_verify_obj.execute_Start()
+    g_var.logger.info(res_email)
+
+    if res_email['msg'] != 'Read Successfully':
+        g_var.logger.info('邮箱验证路由获取失败。。。')
+        return -1
+    else:
+        return res_email['data']
+
+
 # 日志打印装饰器
 def log(func):
     @functools.wraps(func)
@@ -146,7 +300,8 @@ def get_Session(VPN: str):
         成功返回Session对象
         错误返回-1
     """
-    Session = requests.Session()
+    Session = requestsW.Session()
+
     # 获取代理设置
     proxies = ip_proxy(VPN)
     if proxies == {"error": -1}:
@@ -158,7 +313,7 @@ def get_Session(VPN: str):
     return Session
 
 
-def ip_proxy(vpn: str):
+def ip_proxy(vpn: str="en"):
     """
     获取代理
     Args:
@@ -207,6 +362,8 @@ def ip_proxy(vpn: str):
             "http": proxy,
             "https": proxy,
         }
+        if "socks5" in proxies["https"]:
+            proxies["https"]=proxies["https"].replace("socks5","socks5h")
     return proxies
 
 
@@ -228,7 +385,7 @@ def generate_random_string(min: int, max: int,
     return random_str
 
 
-def generate_login_data(present_website: str) -> list:
+def generate_login_data(present_website: str,path="") -> list:
     """
     获取登录数据
     定义一个id的全局变量，初始值为-1，如果为-1，就去读一下config.json，获取id值。之后所有登录都是对这个id操作，而不用再去读config.json
@@ -237,12 +394,14 @@ def generate_login_data(present_website: str) -> list:
     Returns:
         成功返回数据库中返回的账户信息
     """
+    if path=="":
+        path=g_var.ENV_DIR + '/' + present_website + '/config.json'
 
     if g_var.USER_ID == -1:
         # 如果g_var.USER_ID == -1，就让第一个线程去config.json中读取id值到全局变量g_var.USER_ID中
         if g_var.login_data_config_lock.acquire():
             if g_var.USER_ID == -1:
-                with open(g_var.ENV_DIR + '/' + present_website + '/config.json', encoding='utf-8') as f:
+                with open(path, encoding='utf-8') as f:
                     data = json.load(f)
                 g_var.USER_ID = data["currentId"]
             g_var.login_data_config_lock.release()
@@ -347,44 +506,16 @@ def test_email_available(username, password):
         return 0
     except Exception as e:
         # g_var.logger.info(e)
+        requests.get(g_var.INTERFACE_HOST + "/v1/get/email_discard/?email=" + username)
         return -1
 
 
-def account_activation(Session, email_and_passwd, email_verify_obj, headers):
+def get_global_params(present_website: str,Debug=False):
     """
-    注册成功后去邮箱激活账户
+    获取全局参数
     Args:
-        Session：Session对象
-        email_and_passwd：邮箱账户和密码的列表，email_and_passwd[0]表示邮箱，[1]表示密码
-        email_verify_obj：邮箱验证对象
-        headers
-    Returns:
-        邮箱可用返回0，不可用返回-1
+        present_website:网站名
     """
-    res_email = email_verify_obj.execute_Start(email_and_passwd[0], email_and_passwd[1])
-    g_var.logger.info(res_email)
-
-    if res_email['msg'] != 'Read Successfully':
-        g_var.logger.info('邮箱验证路由获取失败。。。')
-        return -1
-
-    verify_url = res_email['data']
-    # headers = {
-    #     'Host': 'knowyourmeme.com',
-    #     'Connection': 'keep-alive',
-    #     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.113 Safari/537.36',
-    #     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
-    # }
-    result = Session.get(verify_url, headers=headers)
-    prove = 'Invalid activation code or user previously activated.'
-    if prove in result.text:
-        g_var.logger.info('新注册账号未通过验证。。。')
-        return -1
-    g_var.logger.info('新注册账号通过验证，接下来自由使用。。。')
-    return result
-
-
-def get_global_params(present_website: str):
     try:
         # r = requests.get(url=g_var.INTERFACE_HOST + "/v1/get/config/")
         headers = {
@@ -423,16 +554,22 @@ def get_global_params(present_website: str):
             g_var.REMAIN_TASK_COUNT = g_var.ALL_COUNT
             MysqlHandler().startDB()
             # MysqlHandler() = MysqlHandler()  # 实例化一个mysql_handler对象
-            g_var.logger = Logger(g_var.ENV_DIR + '/logs/' + present_website + '_' + g_var.UUID + '.log',
+            if Debug:
+                g_var.logger = Logger('./' + present_website + '_' + g_var.UUID + '.log',
+                                      level='info').logger  # 实例化一个logger对象
+            else:
+                g_var.logger = Logger(g_var.ENV_DIR + '/logs/' + present_website + '_' + g_var.UUID + '.log',
                                   level='info').logger  # 实例化一个logger对象
-    except:
+    except Exception as e:
         # 若程序启动没有获取到配置，则直接停止运行
         g_var.logger.error("【3001】 获取不到参数")
         exit()
 
 
 def get_command_line_arguments():
-    # 命令行传入参数
+    """
+    命令行传入参数
+    """
     parser = argparse.ArgumentParser(description='mee_nu argparse')
     parser.add_argument('--count', help='count，必要参数，注册账户数量', required=True)
     parser.add_argument('--host', help='host，必要参数，服务器host', required=True)
@@ -442,6 +579,9 @@ def get_command_line_arguments():
 
 
 def get_new_article():
+    """
+    从接口获取新文章
+    """
     get_article_interface_url = g_var.INTERFACE_HOST + "/v1/get/article/"
     retry_count = 0
     while retry_count < g_var.RETRY_COUNT_MAX:
@@ -470,7 +610,9 @@ def get_new_article():
 
 
 def get_user_agent()->str:
-    #获取浏览器头
+    """
+    从接口获取user_agent
+    """
     headers = {
         'Connection': 'close',
     }
@@ -481,7 +623,9 @@ def get_user_agent()->str:
 
 
 def get_new_link():
-    # 从接口获取超链接
+    """
+    从接口获取超链接
+    """
     get_link_url = g_var.INTERFACE_HOST + "/v1/get/link/"
     retry_count = 0
     while retry_count < g_var.RETRY_COUNT_MAX:
@@ -506,9 +650,42 @@ def get_new_link():
 
     return link
 
+def get_new_title_and_link():
+    # 从接口获取超链接和标题
+    #return [0] title ,[1]link
+    get_link_url = g_var.INTERFACE_HOST + "/v1/get/title_or_link/"
+    retry_count = 0
+    while retry_count < g_var.RETRY_COUNT_MAX:
+        retry_count = retry_count + 1
+        try:
+            headers = {
+                'Connection': 'close',
+            }
+            requests.adapters.DEFAULT_RETRIES = g_var.DEFAULT_RETRIES
+            with requests.get(url=get_link_url, headers=headers, timeout=g_var.TIMEOUT) as r:
+                titleAndLink = r.text.split('|_|')
+        except:
+            time.sleep(g_var.SLEEP_TIME)
+            pass
+        if len(titleAndLink) == 2:
+            break
+    if retry_count == g_var.RETRY_COUNT_MAX:
+        g_var.logger.error("无法从接口获取超链接！")
+        g_var.ERR_CODE = 3004
+        g_var.ERR_MSG = g_var.ERR_MSG + "无法从接口获取超链接！"
+        g_var.SPIDER_STATUS = 3
+        return -1
 
-# 识别字母和数字
+    return titleAndLink
+
 def identify_captcha_1(present_website: str) -> str:
+    """
+    识别字母和数字的验证码
+    :param
+        present_website:当前网站名
+    :return:
+        验证码识别结果
+    """
     file_data = {
         "key": (None, g_var.VERIFY_KEY1),
         'file': ('chaptcha.png', open(g_var.ENV_DIR + '/captcha/' + present_website + '/' +
@@ -542,8 +719,14 @@ def identify_captcha_1(present_website: str) -> str:
     return text.split("|")[1]
 
 
-# 谷歌人机验证
 def google_captcha(Session, googlekey, pageurl):
+    """
+    谷歌人机验证
+    :param Session: Session对象
+    :param googlekey: googlekey
+    :param pageurl: 页面url
+    :return: 谷歌人机验证结果
+    """
     data = {
         'key': g_var.VERIFY_KEY2,
         'method': 'userrecaptcha',
@@ -552,20 +735,23 @@ def google_captcha(Session, googlekey, pageurl):
     }
     url_captcha = g_var.VERIFY_URL2 + '/in.php'
     res = requests.get(url_captcha, params=data)
+    if "|" not in res.text:
+        g_var.logger.info("谷歌验证出现问题" + str(res.text))
+        return -1
     id_code = res.text.split("|")[1]
+    url_code = g_var.VERIFY_URL2 + "/res.php?key=" + g_var.VERIFY_KEY2 + "&action=get&id=" + id_code
     while True:
-        url_code = g_var.VERIFY_URL2 + "/res.php?key=" + g_var.VERIFY_KEY2 + "&action=get&id=" + id_code
-        r = Session.get(url_code, timeout=g_var.TIMEOUT)
+        r = requests.get(url_code, timeout=g_var.TIMEOUT)
         if r.text == "CAPCHA_NOT_READY":
             g_var.logger.info("谷歌人机验证，等待15s"+r.text)
-            time.sleep(10)
-        time.sleep(5)
-        code_list = r.text.split("|")
-        if len(code_list) != 2:
-            pass
+            time.sleep(15)
         else:
-            break
-    return code_list[1]
+            if "|" in r.text:
+                g_var.logger.info("谷歌人机验证，成功:" + r.text.split("|")[1])
+                return r.text.split("|")[1]
+            else:
+                g_var.logger.info("谷歌人机验证，出现问题:" + r.text)
+                return -1
 
 
 def task_dispatch():
@@ -581,6 +767,9 @@ def task_dispatch():
 
 
 def send_spider_block_status():
+    """
+    启动任务阻塞时，向中控发送消息
+    """
     g_var.ERR_MSG = "CPU或内存不足，等待执行"
     status_data = {
         "uuid": g_var.UUID,
@@ -633,7 +822,14 @@ def send_spider_block_status():
 
 
 def send_spider_status(obj_list: list, t_list: list):
-    # 定时向中控发送消息
+    """
+    定时向中控发送消息
+    :param obj_list: 对象列表
+    :param t_list: 线程列表
+    :return:返回两个值，
+        close_send_status_signal：是否停止发送状态信号 0代表不停止继续发送，1代表停止
+        wait_signal：等待信号 0代表需要等待所有线程结束，1代表不等待直接结束
+    """
     g_var.NOW_COUNT = 0
     g_var.SUCCESS_COUNT = 0
     g_var.FAILED_COUNT = 0
@@ -647,15 +843,8 @@ def send_spider_status(obj_list: list, t_list: list):
         g_var.SUCCESS_COUNT = g_var.SUCCESS_COUNT + obj.success_count
 
         # 统计需要暂停程序的报错参数
-        g_var.PROXY_ERR_COUNT = g_var.PROXY_ERR_COUNT + obj.proxy_err_count  # 1、代理连续错误次数
         g_var.CAPTCHA_ERR_COUNT = g_var.CAPTCHA_ERR_COUNT + obj.captcha_err_count  # 2、验证码连续无法正确识别
         g_var.FAILED_COUNT = g_var.FAILED_COUNT + obj.failed_count           # 3、其他错误连续错误次数
-
-    if g_var.PROXY_ERR_COUNT > g_var.PROXY_ERR_MAX:
-        g_var.logger.error("代理连续错误次数过多！" + str(g_var.PROXY_ERR_COUNT))
-        g_var.ERR_CODE = "3003"
-        g_var.ERR_MSG = "代理连续错误次数过多！"
-        g_var.SPIDER_STATUS = 3  # 将所有线程停止
 
     if g_var.CAPTCHA_ERR_COUNT > g_var.CAPTCHA_ERR_MAX:
         g_var.logger.error("验证码连续识别错误次数过多！")
@@ -736,3 +925,23 @@ def send_spider_status(obj_list: list, t_list: list):
         return 1, 0
     else:
         return 0, 0
+
+
+def dictExistValue(d: dict, *args) -> bool:
+    """
+    判断字典中是否有value值  data={"path":{"url":"123"}}   dictExistValue(data,"path","url")
+    :param d: dict
+    :param args:  str
+    :return:
+    """
+    if d:
+        if not isinstance(d, dict):
+            return False
+        for v in args:
+            if v in d:
+                d = d[v]
+            else:
+                return False
+        return True
+    else:
+        return False

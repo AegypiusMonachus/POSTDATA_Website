@@ -5,7 +5,8 @@ import random
 import threading
 import time
 
-import requests
+from project_utils import requestsW  as requests
+
 from requests.adapters import HTTPAdapter
 
 from project_utils.project_util import generate_login_data, ip_proxy, get_new_article, MysqlHandler
@@ -39,7 +40,7 @@ class RedditCom(object):
             headers = {}
             headers['Connection'] = 'close'
             headers['user_agent'] = project_util.get_user_agent()
-            res = Session.get("https://www.reddit.com/register/?actionSource=header_signup", headers=headers,
+            res = Session.get("https://www.reddit.com/register/?actionSource=header_signup",proxies=Session.proxies, headers=headers,
                                timeout=g_var.TIMEOUT)
             re_res = re.search('<input type="hidden" name="csrf_token" value="(.*?)">', res.text)
             if re_res.group():
@@ -68,7 +69,7 @@ class RedditCom(object):
             }
             # headers["content-type"]="application/x-www-form-urlencoded"
 
-            res = Session.post("https://www.reddit.com/register", headers=headers, data=data, timeout=g_var.TIMEOUT)
+            res = Session.post("https://www.reddit.com/register", headers=headers,proxies=Session.proxies, data=data, timeout=g_var.TIMEOUT)
             # if res.json():#成功结果:{"dest": "https://www.reddit.com"}
             if self.__dictExistValue(res.json(), "dest"):
                 self.captcha_err_count = 0
@@ -119,7 +120,7 @@ class RedditCom(object):
                 username = userInfo[1]
                 password = userInfo[2]
 
-                res = Session.get("https://www.reddit.com/register/?actionSource=header_signup",
+                res = Session.get("https://www.reddit.com/register/?actionSource=header_signup",proxies=Session.proxies,
                                   timeout=g_var.TIMEOUT)
                 re_res = re.search('<input type="hidden" name="csrf_token" value="(.*?)">', res.text)
                 if re_res.group():
@@ -142,7 +143,7 @@ class RedditCom(object):
                     retry_count = retry_count + 1
                     try:
                         g_var.logger.info("使用账号密码登录...")
-                        res = Session.post("https://www.reddit.com/login", data=data,  timeout=g_var.TIMEOUT)
+                        res = Session.post("https://www.reddit.com/login",proxies=Session.proxies, data=data,  timeout=g_var.TIMEOUT)
                         # print("登录text",res.text)
                         cookie = res.cookies.get_dict()
                         print("这里是cookie",cookie)
@@ -215,12 +216,12 @@ class RedditCom(object):
                 if len(loginData) == 2:
                     print("11111111111",loginData)
                     res_accessToken = Session.get("https://www.reddit.com/user/%s/submit" % loginData["name"],
-                                                  headers=headers,
+                                                  headers=headers,proxies=Session.proxies,
                                                    timeout=g_var.TIMEOUT)
                 else:
                     res_accessToken = Session.get("https://www.reddit.com/user/%s/submit" % loginData["name"],
                                                   cookies=eval(loginData["cookie"]),
-                                                  headers=headers,
+                                                  headers=headers,proxies=Session.proxies,
                                                    timeout=g_var.TIMEOUT)
 
                 re_res = re.search('{"accessToken":"(.{18,64})",', res_accessToken.text)
@@ -250,12 +251,12 @@ class RedditCom(object):
                 if len(loginData) == 2:
                     res = Session.post(
                         "https://oauth.reddit.com/api/submit?resubmit=true&redditWebClient=desktop2x&app=desktop2x-client-production&rtj=only&raw_json=1&gilding_detail=1" %
-                        loginData["name"], data=contentData,
+                        loginData["name"], data=contentData,proxies=Session.proxies,
                         headers=headers,
                          timeout=g_var.TIMEOUT)
                 else:
                     res = Session.post("https://oauth.reddit.com/api/submit?resubmit=true&redditWebClient=desktop2x&app=desktop2x-client-production&rtj=only&raw_json=1&gilding_detail=1",
-                                       data=contentData, cookies=eval(loginData["cookie"]),
+                                       data=contentData,proxies=Session.proxies, cookies=eval(loginData["cookie"]),
                         headers=headers, timeout=g_var.TIMEOUT)
                 if self.__dictExistValue(res.json(), "json", "data", "url"):
                     resultUrl = res.json()["json"]["data"]["url"]
@@ -266,7 +267,7 @@ class RedditCom(object):
                     if g_var.insert_article_lock.acquire():
                         last_row_id = MysqlHandler().insert(sql)
                         g_var.insert_article_lock.release()
-                    status = MysqlHandler().update(sql)
+                    # status = MysqlHandler().update(sql)
                     return {"ok": 0}
                 else:
                     g_var.logger.error("文章发送失败！\n" + res.text)

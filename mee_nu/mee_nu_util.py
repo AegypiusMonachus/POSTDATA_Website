@@ -360,6 +360,7 @@ class MeeNu(object):
                 status = MysqlHandler().update(sql)
                 if status == 0:
                     g_var.logger.info("cookie失效，清除cookie update OK")
+                    return {"error": -2}
                 else:
                     g_var.logger.error("数据库清除cookie错误!")
                     return {"error": 1}
@@ -525,6 +526,10 @@ class MeeNu(object):
                     # g_var.logger.info("proxies"+str(proxies))
                 elif status == {"error": -1}:
                     # 获取不到文章，程序停止
+                    self.failed_count = self.failed_count + 1
+                    break
+                elif status == {"error": -2}:
+                    # cookie过期
                     self.failed_count = self.failed_count + 1
                     break
             if retry_count == g_var.RETRY_COUNT_MAX:

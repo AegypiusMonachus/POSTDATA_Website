@@ -6,7 +6,7 @@ sys.path.append('./')                 # 在SendArticle目录执行
 sys.path.append('/home/web_python/project/SendArticle')
 
 import psutil
-from scoop_it.scoop_it_util import ScoopIt
+from mixcloud_com.mixcloud_com_util import MixcloudCom
 from project_utils.project_util import get_command_line_arguments, get_global_params, send_spider_status, \
     send_spider_block_status, MysqlHandler
 from project_utils import g_var
@@ -14,7 +14,7 @@ from project_utils import g_var
 
 if __name__ == "__main__":
 
-    present_website = "scoop_it"
+    present_website = "mixcloud_com"
     VPN = "en"
 
     # 获取命令行传入参数
@@ -35,18 +35,6 @@ if __name__ == "__main__":
             quit()
         time.sleep(g_var.SEND_STATUS_INTERVAL)
 
-    # 在注册的主线程前，先取出数据库中最后的id存入config.json中，这样下次发文章开始取到的就是最新注册的账号
-    sql = "select * from "+present_website+" order by id DESC limit 1"
-    userInfo = MysqlHandler().select(sql)
-    if userInfo != None:
-        user_id = int(userInfo[0])
-    else:
-        user_id = 0
-
-    current_id = {"currentId": user_id}
-    with open(g_var.ENV_DIR+'/'+present_website+'/config.json', 'w') as f:
-        json.dump(current_id, f)
-
     # 开始执行程序
     g_var.SPIDER_STATUS = 2
 
@@ -59,15 +47,15 @@ if __name__ == "__main__":
     # 创建一个对象列表
     obj_list = []
     for i in range(0, ADD_ONE_ASSIGNMENT_THREAD_NUM):
-        obj_list.append(ScoopIt(EACH_THREAD_ASSIGNMENT_NUM + 1))
+        obj_list.append(MixcloudCom(EACH_THREAD_ASSIGNMENT_NUM + 1))
     if EACH_THREAD_ASSIGNMENT_NUM != 0:
         for i in range(0, REMAIN_THREAD_NUM):
-            obj_list.append(ScoopIt(EACH_THREAD_ASSIGNMENT_NUM))
+            obj_list.append(MixcloudCom(EACH_THREAD_ASSIGNMENT_NUM))
 
     # 为每个对象开一个线程，加入到线程列表中统一管理
     t_list = []
     for i in range(0, len(obj_list)):
-        t = threading.Thread(target=obj_list[i].registers, args=(present_website, VPN))
+        t = threading.Thread(target=obj_list[i].start, args=(present_website, VPN))
         t_list.append(t)
 
     # 线程开始执行

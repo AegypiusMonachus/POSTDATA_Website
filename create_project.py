@@ -217,7 +217,7 @@ if __name__ == "__main__":
 """
         f4.write(str4)
 
-    with open(dir_name + "/send_profile_bak.py", 'w', encoding='utf-8') as f5:
+    with open(dir_name + "/start.py", 'w', encoding='utf-8') as f5:
         str5 = """import json
 import time
 import threading
@@ -316,12 +316,12 @@ import time
 import requests
 from requests.adapters import HTTPAdapter
 
-from project_utils.project_util import generate_login_data, ip_proxy, get_new_article, MysqlHandler
+from project_utils.project_util import generate_login_data, ip_proxy, get_new_article, MysqlHandler, get_Session, get_email
 from project_utils import g_var
 
 # @#$ 3、本处定义小项目通用的函数
 
-# @#$ 4、定义对象，需要实现__register_one、__login、__postMessage三个功能
+# @#$ 4、定义对象，需要实现__register_one、login、__postMessage三个功能
 # 每个函数都有指定的传入传出参数
 class """+class_name+"""(object):
     def __init__(self, assignment_num):
@@ -341,32 +341,104 @@ class """+class_name+"""(object):
             return -1
         return 0
 
-    def __register_one(self, Session, present_website: str):
+    def __register_one(self, Session, present_website: str, email_and_passwd):
+        \"\"\"
+        注册一个账户
+        Args:
+            Session：Session对象
+            present_website：当前网站名，用于数据库表名
+            email_and_passwd：邮箱账户和密码，email_and_passwd[0]是邮箱，[1]是密码
+        Returns:
+            注册成功返回注册数据字典对象registerData，需要包含user_id, username, password, email
+                user_id这样获取：（示例）
+                    # 将注册的账户写入数据库（sql自己写，这边只是个示例）
+                    sql = "INSERT INTO "+present_website+"(username, password, mail, status) VALUES('" + name + \\
+                          "', '" + psd + "', '" + email_and_passwd[0] + "', '" + str(0) + "');"
+                    last_row_id = MysqlHandler().insert(sql)
+                    if last_row_id != -1:
+                        registerData["id"] = last_row_id
+                        return registerData
+                    else:
+                        g_var.logger.error("数据库插入用户注册数据失败")
+                        return 0
+            注册失败返回状态码
+            0：某些报错需要跳出while循环，更换邮箱。如激活失败或插入数据库失败
+            -1:连续代理错误，停止程序
+            -2:注册失败，可能是打码出错等原因，邮箱可以继续使用（邮箱资源成本较高，因此要确保注册成功后再更换邮箱），不跳出循环
+        \"\"\"
         pass
 
-    def __login(self, Session, VPN, userInfo) -> dict:
-        # 从传入的userInfo中判断是否包含cookie，有cookie直接跳过登录流程，
-        # 没有cookie或cookie过期再执行登录流程
+    def login(self, Session, present_website: str, VPN, userInfo):
+        \"\"\"
+        登录
+        根据用户信息userInfo中是否包含cookie
+        1、有cookie直接构造loginData返回，跳过登录流程
+        2、没有cookie，需要post登录请求，获取到cookie，再构造loginData返回
+        Args:
+            Session：Session对象
+            present_website：当前网站名，用于数据库表名
+            VPN：使用国内or国外代理
+            userInfo：用户信息  userInfo[0]:id [1]:username [2]passwod [3]:emial [4]:status [5]cookie
+            
+        Mysql Update:
+                        # 如果cookie失效，将该cookie从数据库中清除，并重新从数据库中获取登录账号密码
+                sql = "UPDATE %s SET cookie='%s' WHERE id=%s ;" % ("""+dir_name+""", save_cookies, user_id)
+                status = MysqlHandler().update(sql)
+                if status == 0:
+                    g_var.logger.info("cookie失效，清除cookie update OK")
+                    return {"error": -2}
+                else:
+                    g_var.logger.error("数据库清除cookie错误!")
+                    return {"error": 1}    
+        Returns:
+            成功返回loginData
+                loginData = {
+                    'id': user_id,
+                    'username': username,
+                    'password': password,
+                    'cookie': cookie,
+                }
+            失败返回状态值：
+                1:表示账号密码失效，密码被改或账号被网站删除
+                -1:连续代理错误，停止程序
+                -2:页面发生改变，获取不到页面上的一些token值
+                -3:数据库插入更新等错误
+        \"\"\"
 
-        # 判断用户信息中是否包含cookie
         if userInfo[5] != None and userInfo[5] != "":
             # userInfo[5]保存cookie值，如果cookie不为空，则使用cookie
             g_var.logger.info("返回cookie" + userInfo[5])
             user_id = userInfo[0]
             username = userInfo[1]
-            Cookie = userInfo[5]
-            # 长度为3，loginData包含cookie
+            password = userInfo[2]
+            cookie = userInfo[5]
             loginData = {
                 'id': user_id,
-                'name': username,
-                'cookie': Cookie
+                'username': username,
+                'password': password,
+                'cookie': cookie,
             }
             return loginData
         else:
             # cookie为空，使用账号密码登录
             pass
 
-    def __postMessage(self, Session, loginData: dict) -> dict:
+    def __postMessage(self, Session, loginData: dict, present_website):
+        \"\"\"
+        发文章
+        Args:
+            Session：Session对象
+            loginData：用户信息，包括user_id,username,password,cookie
+            present_website：当前网站名，用于数据库表名
+        Returns:
+            成功返回状态值：0
+            失败返回状态值：
+                1:表示账号密码失效，密码被改或账号被网站删除
+                -1:连续代理错误，停止程序
+                -2:页面发生改变，获取不到页面上的一些token值
+                -3:数据库插入更新等错误
+                -4：cookie过期
+        \"\"\"
         pass
 
     def registers(self, present_website: str, VPN: str):
@@ -376,120 +448,137 @@ class """+class_name+"""(object):
                 break
             self.now_count = self.now_count + 1
 
-            Session = requests.Session()
-            # 获取代理设置
-            proxies = ip_proxy(VPN)
-            if proxies == {"error": -1}:
+            Session = get_Session(VPN)
+            if Session == -1:
                 self.failed_count = self.failed_count + 1
                 continue
-            self.failed_count = 0
-            Session.proxies = proxies
-            # 设置最大重试次数
-            Session.mount('http://', HTTPAdapter(max_retries=1))
-            Session.mount('https://', HTTPAdapter(max_retries=1))
 
+            # @#$ 5、获取邮箱,如果不需要邮箱，这边改成传空值
+            email_and_passwd = get_email(present_website)
+            if email_and_passwd == -1:
+                self.failed_count = self.failed_count + 1
+                continue
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
-                registerData = self.__register_one(Session, present_website)
-                if registerData != -1:
-                    # registerData != -1说明注册成功
+                registerData = self.__register_one(Session, present_website, email_and_passwd)
+                if registerData == -1:
+                    g_var.ERR_MSG = g_var.ERR_MSG+"|_|代理连续错误"
+                    g_var.logger.info("代理错误")
+                    retry_count=g_var.RETRY_COUNT_MAX
+                elif registerData == -2:
+                    g_var.logger.info("注册失败,可能是邮箱密码不符合要求、或ip被封等原因，请排查！")
+                    proxies = ip_proxy(VPN)
+                    if proxies == {"error": -1}:
+                        g_var.logger.info("获取代理错误")
+                        self.failed_count = self.failed_count + 1
+                    Session.proxies = proxies
+                elif registerData == 0:
+                    # 注册成功，但激活失败
+                    g_var.logger.info("注册成功,但激活失败！")
+                    break
+                else:
+                    # 注册成功
                     self.success_count = self.success_count + 1
                     self.failed_count = 0
                     break
-                else:
-                    self.failed_count = self.failed_count + 1
-                    proxies = ip_proxy(VPN)
-                    Session.proxies = proxies
-                    time.sleep(g_var.SLEEP_TIME)
-                    continue
+                time.sleep(g_var.SLEEP_TIME)
+
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
-                g_var.ERR_MSG = "连续注册出错，程序停止"
-                g_var.logger.error("register:连续注册失败！程序停止")
+                g_var.ERR_MSG =  g_var.ERR_MSG+"|_|连续注册出错，程序停止"
+                g_var.logger.error("连续注册失败！程序停止")
                 break
 
         g_var.logger.info("g_var.SPIDER_STATUS" + str(g_var.SPIDER_STATUS))
         g_var.logger.info("本线程共成功注册'self.success_count'=" + str(self.success_count) + "个账户")
 
-    def loginAndPostMessage(self, VPN: str):
+    def loginAndPostMessage(self, present_website, VPN: str):
         while self.success_count < self.assignment_num:
             # 每次循环检测当前错误状态
             if self.__monitor_status() == -1:
                 break
             self.now_count = self.now_count + 1
 
-            Session = requests.Session()
-            # 获取代理设置
-            proxies = ip_proxy(VPN)
-            if proxies == {"error": -1}:
+            Session = get_Session(VPN)
+            if Session == -1:
                 self.failed_count = self.failed_count + 1
                 continue
 
-            Session.proxies = proxies
-            Session.mount('http://', HTTPAdapter(max_retries=1))
-            Session.mount('https://', HTTPAdapter(max_retries=1))
+            # 从数据库中获取用户信息
+            userInfo = generate_login_data(present_website)
+            g_var.logger.info(userInfo)
+            if userInfo == None:
+                g_var.ERR_CODE = 2001
+                g_var.ERR_MSG = g_var.ERR_MSG + "无法获取proxy!"
+                g_var.logger.error("数据库中获取用户失败，本线程停止！")
+                return -1
 
             # 1、登录
+            login_signal = 0
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
-                # 从数据库中获取用户信息
-                userInfo = generate_login_data()
-                if userInfo == None:
-                    g_var.logger.error("数据库中获取用户失败，本线程停止！")
-                    return {"error": -1}
+
+                loginData = self.login(Session, present_website, VPN, userInfo)
+                if loginData == -1:
+                    # 代理问题，更换代理
+                    g_var.ERR_MSG = g_var.ERR_MSG+"|_|代理连续错误"
+                    g_var.logger.info("代理错误")
+                    retry_count=g_var.RETRY_COUNT_MAX
+                elif loginData == -2:
+                    # 账号异常，跳出本循环
+                    self.failed_count = self.failed_count + 1
+                    login_signal = 1
+                    break
                 else:
-                    loginData = self.__login(Session, VPN, userInfo)
-                    if loginData == {"error": -1}:
-                        # 登录报错，停止运行
-                        g_var.ERR_MSG = "登录出错"
-                        self.failed_count = self.failed_count + 1
-                        time.sleep(g_var.SLEEP_TIME)
-                        proxies = ip_proxy(VPN)
-                        Session.proxies = proxies
-                        continue
-                    elif loginData == {"error": 1}:
-                        # 账号异常，重新取新账号登录
-                        self.failed_count = self.failed_count + 1
-                        continue
-                    else:
-                        self.failed_count = 0
-                        self.proxy_err_count = 0
-                        break
+                    self.failed_count = 0
+                    break
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
-                g_var.ERR_MSG = "连续登录出错，程序停止"
+                g_var.ERR_MSG = g_var.ERR_MSG+"|_|连续登录出错，程序停止"
                 g_var.logger.error("login:连续登录失败！程序停止")
                 break
+            if login_signal == 1:
+                continue
 
             # 2、发文章
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
+                time.sleep(g_var.SLEEP_TIME)
                 retry_count = retry_count + 1
-                status = self.__postMessage(Session, loginData)
-                if status == {"ok": 0}:  # 发文章成功
+                status = self.__postMessage(Session, loginData, present_website)
+                if status == 0:  # 发文章成功
                     self.success_count = self.success_count + 1
                     self.failed_count = 0
-                    self.proxy_err_count = 0
                     break
-                elif status == {"error": 1}:
+                elif status == -1:
+                    # 返回值为-1，更换代理
+                    g_var.ERR_MSG = g_var.ERR_MSG+"|_|代理连续错误"
+                    g_var.logger.info("代理错误")
+                    retry_count=g_var.RETRY_COUNT_MAX
+                elif status == -2:
+                    # 返回值为-1，某些必须停止的错误，程序停止
                     self.failed_count = self.failed_count + 1
-                    self.proxy_err_count = self.proxy_err_count + 1
-                    time.sleep(g_var.SLEEP_TIME)
-                    proxies = ip_proxy(VPN)
-                    Session.proxies = proxies
-                    # g_var.logger.info("proxies"+str(proxies))
-                elif status == {"error": -1}:
-                    # 获取不到文章，程序停止
+                    g_var.SPIDER_STATUS = 3
+                    break
+                elif status == -3:
+                    # 返回值为-1，数据库错误
                     self.failed_count = self.failed_count + 1
+                elif status == -4:
+                    sql = "UPDATE %s SET cookie=null WHERE id=%s ;" % (present_website, loginData["id"])
+                    g_var.logger.info(sql)
+                    status = MysqlHandler().update(sql)
+                    if status!=0:
+                        g_var.logger.error("数据库清除cookie错误!")
+                        return {"error": 1}
                     break
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
-                g_var.ERR_MSG = "连续发文章出错，程序停止"
+                g_var.ERR_MSG = g_var.ERR_MSG+"|_|连续发文章出错，程序停止"
                 g_var.logger.error("连续发文章出错，程序停止")
                 break
         g_var.logger.info("成功发送" + str(self.success_count) + "篇文章")
@@ -500,95 +589,115 @@ class """+class_name+"""(object):
             if self.__monitor_status() == -1:
                 break
             self.now_count = self.now_count + 1
+
             # 设置Session对象
-            Session = requests.Session()
-            proxies = ip_proxy(VPN)
-            if proxies == {"error": -1}:
+            Session = get_Session(VPN)
+            if Session == -1:
                 self.failed_count = self.failed_count + 1
                 continue
-            Session.proxies = proxies
-            Session.mount('http://', HTTPAdapter(max_retries=1))
-            Session.mount('https://', HTTPAdapter(max_retries=1))
 
             # 1、注册
+            # 获取邮箱
+            email_and_passwd = get_email(present_website)
+            if email_and_passwd == -1:
+                self.failed_count = self.failed_count + 1
+                continue
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
-                registerData = self.__register_one(Session, present_website)
+                registerData = self.__register_one(Session, present_website, email_and_passwd)
 
-                if registerData != -1:     # 说明注册成功
+                if registerData == -1:
+                    g_var.ERR_MSG = g_var.ERR_MSG+"|_|代理连续错误"
+                    g_var.logger.info("代理错误")
+                    retry_count=g_var.RETRY_COUNT_MAX
+                elif registerData == 0:
+                    # 注册成功，但激活失败
+                    g_var.logger.info("注册成功,但激活失败！")
                     break
                 else:
-                    # 失败更换代理
-                    g_var.logger.info("注册失败" + str(registerData))
-                    time.sleep(g_var.SLEEP_TIME)
-                    proxies = ip_proxy(VPN)
-                    Session.proxies = proxies
-                    continue
+                    # 注册成功
+                    self.failed_count = 0
+                    break
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
+                g_var.ERR_MSG =  g_var.ERR_MSG+"|_|连续注册出错，程序停止"
                 g_var.logger.error("start:连续注册失败！程序停止")
                 break
 
             # 2、登录
+            Session = get_Session(VPN)
+            if Session == -1:
+                self.failed_count = self.failed_count + 1
+                continue
+
+            # 构造一个userInfo
+            userInfo: tuple = (registerData['user_id'], registerData['user[login]'], registerData['user[password]'],
+                               registerData['user[email]'], '0', "")
+
+            login_signal = 0   # 记录状态，成功为0，失败为1
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
-                # 构造一个userInfo
-                userInfo: tuple = (registerData['user_id'], registerData['name'], registerData['password'],
-                                   registerData['mail'], '0', "")
 
-                loginData = self.__login(Session, VPN, userInfo)
-                if loginData == {"error": -1}:
-                    # 登录报错，停止运行
-                    g_var.ERR_MSG = "登录出错"
+                loginData = self.login(Session, present_website, VPN, userInfo)
+                if loginData == -1:
+                    # 代理问题，更换代理
+                    g_var.ERR_MSG = g_var.ERR_MSG+"|_|代理连续错误"
+                    g_var.logger.info("代理错误")
+                    retry_count=g_var.RETRY_COUNT_MAX
+                elif loginData == -2:
+                    # 账号异常，跳出本循环
                     self.failed_count = self.failed_count + 1
-                    time.sleep(g_var.SLEEP_TIME)
-                    proxies = ip_proxy(VPN)
-                    Session.proxies = proxies
-                    continue
-                elif loginData == {"error": 1}:
-                    # 账号异常，重新取新账号登录
-                    self.failed_count = self.failed_count + 1
-                    continue
+                    login_signal = 1
+                    break
                 else:
                     self.failed_count = 0
-                    self.proxy_err_count = 0
                     break
             if retry_count == g_var.RETRY_COUNT_MAX:
                 g_var.SPIDER_STATUS = 3
+                g_var.ERR_MSG =  g_var.ERR_MSG+"|_|连续登录出错，程序停止"
                 g_var.logger.error("start:连续登录失败！程序停止")
                 break
+            if login_signal == 1:
+                continue
 
             # 3、发文章
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
-                status = self.__postMessage(Session, loginData)
-                if status == {"ok": 0}:  # 发文章成功
+                status = self.__postMessage(Session, loginData, present_website)
+                if status == 0:  # 发文章成功
                     self.success_count = self.success_count + 1
                     self.failed_count = 0
-                    self.proxy_err_count = 0
                     break
-                elif status == {"error": 1}:
+                elif status == -1:
+                    g_var.ERR_MSG = g_var.ERR_MSG+"|_|代理连续错误"
+                    g_var.logger.info("代理错误")
+                    retry_count=g_var.RETRY_COUNT_MAX
+                elif status == -2:
+                    # 某些必须停止的错误，程序停止
                     self.failed_count = self.failed_count + 1
-                    self.proxy_err_count = self.proxy_err_count + 1
-                    time.sleep(g_var.SLEEP_TIME)
-                    proxies = ip_proxy(VPN)
-                    Session.proxies = proxies
-                    # g_var.logger.info("proxies"+str(proxies))
-                elif status == {"error": -1}:
-                    # 获取不到文章，程序停止
+                    g_var.SPIDER_STATUS = 3
+                    break
+                elif status == -3:
                     self.failed_count = self.failed_count + 1
+                elif status == -4:
+                    sql = "UPDATE %s SET cookie=null WHERE id=%s ;" % (present_website, loginData["id"])
+                    g_var.logger.info(sql)
+                    status = MysqlHandler().update(sql)
+                    if status!=0:
+                        g_var.logger.error("数据库清除cookie错误!")
+                        return {"error": 1}
                     break
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
-                g_var.ERR_MSG = "连续发文章出错，程序停止"
+                g_var.ERR_MSG = g_var.ERR_MSG+"|_|连续发文章出错，程序停止"
                 g_var.logger.error("连续发文章出错，程序停止")
                 break
-        g_var.logger.info("成功注册账户并发送文章" + str(self.success_count) + "篇")        
+        g_var.logger.info("成功注册账户并发送文章" + str(self.success_count) + "篇")      
 """
         f6.write(str6)
 

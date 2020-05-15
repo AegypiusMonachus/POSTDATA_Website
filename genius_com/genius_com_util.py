@@ -5,9 +5,10 @@ import random
 import threading
 import time
 import requests
+from project_utils import requestsW
 from requests.adapters import HTTPAdapter
 
-from project_utils.project_util import generate_random_string, ip_proxy, MysqlHandler, get_new_link
+from project_utils.project_util import generate_random_string, ip_proxy, MysqlHandler, get_new_link, get_Session
 from project_utils import g_var
 
 def generate_headers(signal, csrf_token=None, rapgenius_session=None, loginData=None):
@@ -79,6 +80,8 @@ def get_authenticity_token_signup(Session):
     try:
         url = 'https://genius.com/signup'
         res = Session.get(url, timeout=g_var.TIMEOUT)
+        if res == -1:
+            return 0, 0, 0
         token_list = re.findall('name="authenticity_token" type="hidden" value="(.*?)" /></div>', res.text)
         res_headers = json.dumps(dict(res.headers))
         csrf_token_list = re.findall('_csrf_token=(.*?);', res_headers)
@@ -193,48 +196,55 @@ class GeniusCom(object):
         return 0
 
     def __register_one(self, Session):
+        g_var.logger.info("register。。。")
         # 获取authenticity_token、_csrf_token、_rapgenius_session值
         authenticity_token, csrf_token, rapgenius_session = get_authenticity_token_signup(Session)
-        if authenticity_token == -1:
-            g_var.logger.info('注册账号前未获取到authenticity_token值或_csrf_token值或_rapgenius_session值。。。')
+        if authenticity_token == 0:
             return -1
+        elif authenticity_token == -1:
+            return -2
         # 获取headers
         headers = generate_headers(0, csrf_token, rapgenius_session)
         if headers == -1:
             g_var.logger.info("获取headers失败。。。")
-            return -1
+            return -2
 
         # 注册数据
         registerData = generate_register_data(authenticity_token)
         url_register = 'https://genius.com/account'
-        try:
-            g_var.logger.info("提交注册中。。。")
-            html = Session.post(url_register, data=registerData, headers=headers, timeout=g_var.TIMEOUT).text
-            self.proxy_err_count = 0
-        except Exception as e:
-            g_var.logger.error(e)
-            g_var.logger.error("提交注册信息超时。。。")
-            g_var.ERR_CODE = "5000"
-            g_var.ERR_MSG = "注册出错|_|" + str(e)
-            self.proxy_err_count = self.proxy_err_count + 1
-            return -1
+        g_var.logger.info("提交注册中。。。")
+        html = requests.post(url_register, data=registerData, headers=headers, timeout=g_var.TIMEOUT)
+        if html == -1:
+            return html
 
         # 注册成功验证
-        user_id_list = re.findall('CURRENT_USER = {"id":(.*?),"login":', html)
+        user_id_list = re.findall('CURRENT_USER = {"id":(.*?),"login":', html.text)
         if not user_id_list:
-            g_var.logger.info('注册失败。。。')
-            return -1
+            g_var.logger.info(html.status_code)
+            return -2
+        session_list = re.findall('_rapgenius_session=(.*?);', html.headers['Set-Cookie'])
         # 插入数据库
-        cookie = authenticity_token + '|_|' +csrf_token + '|_|' + rapgenius_session
-        sql = "INSERT INTO genius_com(username, password, mail, cookie, user_id) VALUES('" + registerData['user[login]'] + \
-              "', '" + registerData['user[password]'] + "', '" + registerData['user[email]'] + "', '" + cookie + "', '" + user_id_list[0] +"');"
-        last_row_id = MysqlHandler().insert(sql)
-        if last_row_id != -1:
-            registerData["id"] = last_row_id
-            return registerData
-        else:
-            g_var.logger.error("数据库插入失败")
-            return -1
+        try:
+            sql = "INSERT INTO genius_com(username, password, mail, user_id) VALUES('" + registerData['user[login]'] + \
+                  "', '" + registerData['user[password]'] + "', '" + registerData['user[email]'] + "', '" + user_id_list[0] +"');"
+            last_row_id = MysqlHandler().insert(sql)
+            if last_row_id != -1:
+                registerData["id"] = last_row_id
+                registerData["user_id"] = user_id_list[0]
+                registerData["name"] = registerData['user[login]']
+                registerData["rapgenius_session"] = session_list[0]
+                return registerData
+            else:
+                g_var.ERR_CODE = 2004
+                g_var.ERR_MSG = "数据库插入用户注册数据失败..."
+                g_var.logger.error("数据库插入用户注册数据失败...")
+                return 0
+        except Exception as e:
+            g_var.logger.info(e)
+            g_var.ERR_CODE = 2004
+            g_var.ERR_MSG = "数据库插入用户注册数据出现异常..."
+            g_var.logger.error("数据库插入用户注册数据出现异常...")
+            return 0
 
     def __login(self, Session, VPN, userInfo):
         g_var.logger.info('login。。。。。。')
@@ -265,17 +275,12 @@ class GeniusCom(object):
             try:
                 g_var.logger.info("使用账号密码登录...")
                 html = Session.post(url=url_login, headers=headers, data=loginData, timeout=g_var.TIMEOUT)
-                self.proxy_err_count = 0
                 break
             except Exception as e:
                 g_var.logger.error(e)
                 g_var.logger.error("账号密码登录超时")
                 g_var.ERR_CODE = "5000"
                 g_var.ERR_MSG = "登录出错|_|" + str(e)
-                self.proxy_err_count = self.proxy_err_count + 1
-                time.sleep(g_var.SLEEP_TIME)
-                proxies = ip_proxy(VPN)
-                Session.proxies = proxies
                 continue
         if retry_count == g_var.RETRY_COUNT_MAX:
             g_var.SPIDER_STATUS = 3
@@ -329,15 +334,10 @@ class GeniusCom(object):
             return -1
 
         url_postLink = 'https://genius.com/api/users/'+str(loginData['user_id'])+'?text_format=html,markdown'
-        try:
-            g_var.logger.info("发送链接中...")
-            res = Session.put(url_postLink, headers=headers, json=data, timeout=g_var.TIMEOUT)
-        except Exception as e:
-            g_var.ERR_CODE = "5000"
-            g_var.ERR_MSG = '使用代理IP发送链接出现异常。。。'
-            g_var.logger.error(e)
-            g_var.logger.error("发链接超时!")
-            return 1
+        g_var.logger.info("发送链接中...")
+        res = Session.put(url_postLink, headers=headers, json=data, timeout=g_var.TIMEOUT)
+        if res == -1:
+            return res
 
         if res.status_code == 200:
             g_var.logger.info("链接发送成功！" + loginData["name"])
@@ -350,14 +350,14 @@ class GeniusCom(object):
                 if last_row_id != -1:
                     g_var.logger.info("insert article OK")
                 else:
-                    g_var.logger.error("数据库插入文章错误!")
-                    return 1
-            return 0
+                    g_var.logger.error("数据库插入连接数据错误!")
+                    return 0
+            return loginData
         else:
             g_var.logger.error("链接发送失败！" + str(res.status_code))
             g_var.ERR_CODE = 5000
             g_var.ERR_MSG = g_var.ERR_MSG + "|_|" + "链接发送失败，未知错误!"
-            return 1
+            return 0
 
     def registers(self, present_website, VPN):
         while self.success_count < self.assignment_num:
@@ -366,17 +366,11 @@ class GeniusCom(object):
                 break
             self.now_count = self.now_count + 1
 
-            Session = requests.Session()
-            # 获取代理设置
-            proxies = ip_proxy(VPN)
-            if proxies == {"error": -1}:
+            # 设置Session对象
+            Session = get_Session(VPN)
+            if Session == -1:
                 self.failed_count = self.failed_count + 1
                 continue
-            self.failed_count = 0
-            Session.proxies = proxies
-            # 设置最大重试次数
-            Session.mount('http://', HTTPAdapter(max_retries=1))
-            Session.mount('https://', HTTPAdapter(max_retries=1))
 
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
@@ -411,16 +405,11 @@ class GeniusCom(object):
                 break
             self.now_count = self.now_count + 1
 
-            Session = requests.Session()
-            # 获取代理设置
-            proxies = ip_proxy(VPN)
-            if proxies == {"error": -1}:
+            # 设置Session对象
+            Session = get_Session(VPN)
+            if Session == -1:
                 self.failed_count = self.failed_count + 1
                 continue
-
-            Session.proxies = proxies
-            Session.mount('http://', HTTPAdapter(max_retries=1))
-            Session.mount('https://', HTTPAdapter(max_retries=1))
 
             userInfo = generate_login_data()
             # 从数据库中获取用户信息
@@ -496,94 +485,64 @@ class GeniusCom(object):
                 break
             self.now_count = self.now_count + 1
             # 设置Session对象
-            Session = requests.Session()
-            proxies = ip_proxy(VPN)
-            if proxies == {"error": -1}:
+            Session = get_Session(VPN)
+            if Session == -1:
                 self.failed_count = self.failed_count + 1
                 continue
-            Session.proxies = proxies
-            Session.mount('http://', HTTPAdapter(max_retries=1))
-            Session.mount('https://', HTTPAdapter(max_retries=1))
-
             # 1、注册
             retry_count = 0
+            register_signal = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
                 registerData = self.__register_one(Session)
-                if registerData != -1:     # 说明注册成功
-                    self.failed_count = 0
+                if registerData == -1:
+                    # 失败更换代理
+                    g_var.ERR_CODE = 3003
+                    g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
+                    g_var.logger.info("代理错误")
+                    retry_count = g_var.RETRY_COUNT_MAX
+                elif registerData == -2:
+                    # 注册过程中出现失败！
+                    g_var.logger.info("注册过程中出现失败！")
+                    continue
+                elif registerData == 0:
+                    # 注册成功，但存库失败
+                    g_var.logger.info("注册成功,但存库失败！")
+                    register_signal = 1
                     break
                 else:
-                    # 失败更换代理
-                    g_var.logger.info("注册失败" + str(registerData))
-                    time.sleep(g_var.SLEEP_TIME)
-                    proxies = ip_proxy(VPN)
-                    Session.proxies = proxies
-                    self.failed_count += 1
-                    continue
+                    # 说明注册成功
+                    self.failed_count = 0
+                    break
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
+                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续注册出错，程序停止"
                 g_var.logger.error("start:连续注册失败！程序停止")
                 break
 
-            # 2、登录
-            retry_count = 0
-            login_signal = 0
-            while retry_count < g_var.RETRY_COUNT_MAX:
-                retry_count = retry_count + 1
-                # 构造一个userInfo
-                userInfo = (registerData['id'], registerData['user[login]'], registerData['user[password]'])
-                print(userInfo)
-                loginData = self.__login(Session, VPN, userInfo)
-                if loginData == -1:
-                    # 登录报错，停止运行
-                    g_var.logger.info('register success, login error。。。。。。')
-                    self.failed_count = self.failed_count + 1
-                    time.sleep(g_var.SLEEP_TIME)
-                    proxies = ip_proxy(VPN)
-                    Session.proxies = proxies
-                    continue
-                elif loginData == 1:
-                    # 账号异常，重新取新账号登录
-                    self.failed_count = self.failed_count + 1
-                    login_signal = 1
-                    continue
-                else:
-                    self.failed_count = 0
-                    self.proxy_err_count = 0
-                    break
-            if retry_count == g_var.RETRY_COUNT_MAX:
-                g_var.SPIDER_STATUS = 3
-                g_var.logger.error("start:连续登录失败！程序停止")
-                break
-
-            if login_signal == 1:
-                continue
-            # 3、发链接
+            # 2、发链接
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
-                status = self.__postMessage(Session, loginData)
-                if status == 0:  # 发链接成功
-                    self.success_count = self.success_count + 1
+                status = self.__postMessage(Session, registerData)
+                if status == -1:
+                    g_var.ERR_CODE = 3003
+                    g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
+                    g_var.logger.info("代理错误")
+                    retry_count = g_var.RETRY_COUNT_MAX
+                elif status == 0:
+                    # 链接数据存库失败
+                    sself.failed_count = self.failed_count + 1
+                    continue
+                else:  # 发链接成功
+                    self.success_count += 1
                     self.failed_count = 0
-                    self.proxy_err_count = 0
-                    break
-                elif status == 1:
-                    self.failed_count = self.failed_count + 1
-                    self.proxy_err_count = self.proxy_err_count + 1
-                    time.sleep(g_var.SLEEP_TIME)
-                    proxies = ip_proxy(VPN)
-                    Session.proxies = proxies
-                elif status == -1:
-                    # 获取不到链接，程序停止
-                    self.failed_count = self.failed_count + 1
                     break
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
-                g_var.ERR_MSG = "连续发链接出错，程序停止"
+                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续注册出错，程序停止"
                 g_var.logger.error("连续发链接出错，程序停止")
                 break
         g_var.logger.info("成功注册账户并发送链接" + str(self.success_count) + "个。")

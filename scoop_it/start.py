@@ -35,18 +35,6 @@ if __name__ == "__main__":
             quit()
         time.sleep(g_var.SEND_STATUS_INTERVAL)
 
-    # 在注册的主线程前，先取出数据库中最后的id存入config.json中，这样下次发文章开始取到的就是最新注册的账号
-    sql = "select * from "+present_website+" order by id DESC limit 1"
-    userInfo = MysqlHandler().select(sql)
-    if userInfo != None:
-        user_id = int(userInfo[0])
-    else:
-        user_id = 0
-
-    current_id = {"currentId": user_id}
-    with open(g_var.ENV_DIR+'/'+present_website+'/config.json', 'w') as f:
-        json.dump(current_id, f)
-
     # 开始执行程序
     g_var.SPIDER_STATUS = 2
 
@@ -67,7 +55,7 @@ if __name__ == "__main__":
     # 为每个对象开一个线程，加入到线程列表中统一管理
     t_list = []
     for i in range(0, len(obj_list)):
-        t = threading.Thread(target=obj_list[i].registers, args=(present_website, VPN))
+        t = threading.Thread(target=obj_list[i].start, args=(present_website, VPN))
         t_list.append(t)
 
     # 线程开始执行
