@@ -1,6 +1,9 @@
 import json
 import re
 import urllib3
+
+from project_utils import project_util, requestsW
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from project_utils.project_util import ip_proxy as uitl_ip_proxy
 import requests
@@ -37,8 +40,7 @@ email: 17752545955@163.com
 import requests
 import time
 
-headers = {
-    "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.129 Safari/537.36"}
+headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.129 Safari/537.36"}
 
 # 人机身份验证码识别
 def captcha() -> str:
@@ -112,25 +114,33 @@ def ip_proxy() -> dict:
         "http": proxies,
         "https": proxies,
     }
-    print(proxies)
     return proxies
 
 
 
 
-def register(user, pwd, email)->(str,str,str):
+def register()->(str,str,str):
+    user = project_util.generate_random_string(12, 16)
+    pwd = project_util.generate_random_string(10, 12)
+    email = user + "@qq.com"
     dicproxy = ip_proxy()
     s = requests.session()
     s.proxies = dicproxy
     s.headers = headers
+    proxies=ip_proxy()
 
-    res = s.get("https://www.reddit.com/register/?actionSource=header_signup",timeout=30)
+
+    res = requestsW.get("https://www.reddit.com/register/?actionSource=header_signup",proxies=proxies,headers=headers,timeout=5)
+    cookies=res.cookies.get_dict()
+    print(cookies)
     print("已经响应",res)
     re_res = re.search('<input type="hidden" name="csrf_token" value="(.*?)">', res.text)
     csrf_token = re_res.group(1)
     print("正在打码中")
-    g_recaptcha_response = captcha()
+    # g_recaptcha_response = captcha()
+    g_recaptcha_response="03AGdBq24tyZjh-Ini2ud5ISBy1Eb-UYEpSKYdgxsNNLLvMRQT4VXCVW4Z1EuXrtX4GwlERbjJkS1x9cJtcPbKmGYwzvqRfajGUvFyq9CEfRSzohkPv54Lnk1BlU3OHE8suDOSrKwc90uj7TPeTL12VUhdyCk-H73quiajTYNuwd3pJm1xdWbbo4JthN8N0hvMIrsdM7_XYAclp_BN9QTWkwmhjDTpR8-CM2zWJ48JKug-9KZzaVM-Bmxzb7LVr4NcG5XozTrhsIdbS89eLSo8aoS7V-frd8Hb6xFpBpvjtsCQMnE25FoR7FqPmL2ER0bNV7QgowFX6Z8OFZ95fDDTub5S9qCQUr7Zactpz57_W38T6opn4u4swVH_EcEGUpkT1IhUgy5GVVsBgvidVR3F0j7F5tfLQ2_GKg"
     print("打印验证码:", g_recaptcha_response)
+
 
     data = {
         "csrf_token": csrf_token,
@@ -142,7 +152,7 @@ def register(user, pwd, email)->(str,str,str):
     }
     # res.headers["content-type"]="application/x-www-form-urlencoded"
 
-    res = s.post("https://www.reddit.com/register", data=data,timeout=30)
+    res = requestsW.post("https://www.reddit.com/register",headers=headers,proxies=proxies,cookies=cookies, data=data,timeout=5)
     print(res.cookies)
     print("注册结果:", res.text)
 
@@ -286,10 +296,8 @@ def article_test(content: str):
 
 
 if __name__ == '__main__':
-    user = "1752545957187"
-    pwd = "hujie1995"
-    email = user + "@qq.com"
-    # register(user,pwd,email)
+
+    register()
     # cookies = login(user, pwd)
     # send_article(user,pwd,cookies)
     # print(get_new_article())
@@ -297,9 +305,9 @@ if __name__ == '__main__':
     # articleList = get_new_article()
     # article_test(articleList[1])
 
-    s=0
-    for i in range(30):
-        b=test()
-        if b:s+=1
-
-    print(s)
+    # s=0
+    # for i in range(30):
+    #     b=test()
+    #     if b:s+=1
+    #
+    # print(s)

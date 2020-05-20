@@ -1,20 +1,12 @@
-import re
-import json
-import sys
-import random
-import threading
 import time
 
-import requests
-from requests.adapters import HTTPAdapter
-
-from project_utils.project_util import generate_login_data, ip_proxy, get_new_article, MysqlHandler, get_Session, \
-    get_email, EmailVerify, account_activation, google_captcha, generate_random_string
+from project_utils.project_util import generate_login_data, MysqlHandler, get_Session, get_email, EmailVerify, \
+    account_activation, generate_random_string, google_captcha
 from project_utils import g_var
 
 # @#$ 3、本处定义小项目通用的函数
 
-# @#$ 4、定义对象，需要实现__register_one、__login、__postMessage三个功能
+# @#$ 4、定义对象，需要实现__register_one、login、__postMessage三个功能
 # 每个函数都有指定的传入传出参数
 class ScoopIt(object):
     def __init__(self, assignment_num):
@@ -36,17 +28,18 @@ class ScoopIt(object):
 
     def __register_one(self, Session, present_website: str, email_and_passwd):
         """
-        注册一个账户
+        注册一个账户,需要实现注册、激活、并将注册数据存入数据库的功能
         Args:
             Session：Session对象
             present_website：当前网站名，用于数据库表名
             email_and_passwd：邮箱账户和密码，email_and_passwd[0]是邮箱，[1]是密码
         Returns:
-            注册成功返回注册数据字典对象registerData，需要包含user_id, username, password, email
+            注册成功返回注册数据字典对象registerData，需要包含id, username, password, email, cookie(在访问激活链接时能取到，\
+            取不到返回空)
                 user_id这样获取：（示例）
                     # 将注册的账户写入数据库（sql自己写，这边只是个示例）
-                    sql = "INSERT INTO "+present_website+"(username, password, mail, status) VALUES('" + name + \
-                          "', '" + psd + "', '" + email_and_passwd[0] + "', '" + str(0) + "');"
+                    sql = "INSERT INTO "+present_website+"(username, password, mail, status, cookie) VALUES('" + \
+                    username + "', '" + password + "', '" + email + "', '" + str(0) + cookie + "');"
                     last_row_id = MysqlHandler().insert(sql)
                     if last_row_id != -1:
                         registerData["user_id"] = last_row_id
@@ -55,17 +48,17 @@ class ScoopIt(object):
                         g_var.logger.error("数据库插入用户注册数据失败")
                         return 0
             注册失败返回状态码
-            0：注册成功，但是激活失败或插入数据库失败
-            -1:表示requests请求页面失败，需要更换代理
-            -2:注册失败，可能是邮箱密码不符合要求、或ip被封等原因，需要排查
+            0：某些报错需要跳出while循环，更换邮箱
+            -1:连续代理错误或页面发生改变等取不到关键数据等，需要停止程序
+            -2:注册失败，可能是打码出错等原因，邮箱可以继续使用（邮箱资源成本较高，因此要确保注册成功后再更换邮箱），不跳出循环
         """
         FullName = generate_random_string(15, 20)
         password = generate_random_string(10, 15)
 
-        googlekey = "6LevIjoUAAAAAEJnsStYfxxf5CEQgST01NxAwH8v"
-        pageurl = "https://www.scoop.it/subscribe?&token=&sn=&showForm=true"
-        recaptcha_value = google_captcha(Session, googlekey, pageurl)
-        # recaptcha_value = input("请输入验证码：")
+        # googlekey = "6LevIjoUAAAAAEJnsStYfxxf5CEQgST01NxAwH8v"
+        # pageurl = "https://www.scoop.it/subscribe?&token=&sn=&showForm=true"
+        # recaptcha_value = google_captcha(Session, googlekey, pageurl)
+        recaptcha_value = input("请输入验证码：")
 
         registerData = {
             'jsDetectedTimeZone': 'Asia/Shanghai',
@@ -89,8 +82,11 @@ class ScoopIt(object):
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.129 Safari/537.36',
         }
         url = "https://www.scoop.it/subscribe?&token=&sn=&showForm=true"
-        Session.get(url, headers=headers, timeout=g_var.TIMEOUT)
-        html = Session.post(url, headers=headers, data=registerData, timeout=g_var.TIMEOUT).text
+        result = Session.post(url, headers=headers, data=registerData, timeout=g_var.TIMEOUT)
+        if result == -1:
+            g_var.logger.error("提交注册信息超时")
+            return -1
+        g_var.logger.info("提交注册..."+result.text)
 
         re_text = '(https://www.scoop.it/confirm\?.*?)" '
         email_verify_obj = EmailVerify(email_and_passwd[0], email_and_passwd[1], re_text)
@@ -100,21 +96,33 @@ class ScoopIt(object):
             g_var.logger.error("访问激活链接超时")
             return -1
 
-        sql = "INSERT INTO "+present_website+"(username, password, mail, status, cookie) VALUES('" + FullName + \
-              "', '" + password + "', '" + email_and_passwd[0] + "', '" + str(0) + str(result.cookies.get_dict()) +"');"
-        last_row_id = MysqlHandler().insert(sql)
+        # 获取cookie
+        # 也就是这边取不到cookie，还需要填写自己感兴趣的领域？？？
+        print(result.cookies.get_dict())
+        cookie = str(result.cookies.get_dict())
 
-    def __login(self, Session, present_website: str, VPN, userInfo):
+        sql = "INSERT INTO " + present_website + "(username, password, mail, status, cookie) VALUES('" + FullName + \
+              "', '" + password + "', '" + email_and_passwd[0] + "', '" + str(0) + "', '" +cookie + "');"
+        last_row_id = MysqlHandler().insert(sql)
+        if last_row_id != -1:
+            registerData = dict()
+            registerData["user_id"] = last_row_id
+            return registerData
+        else:
+            g_var.logger.error("数据库插入用户注册数据失败")
+            return 0
+
+    def login(self, Session, present_website: str, VPN, userInfo):
         """
         登录
-        根据用户信息userInfo中是否包含cookie
-        1、有cookie直接构造loginData返回，跳过登录流程
-        2、没有cookie，需要post登录请求，获取到cookie，再构造loginData返回
+        根据用户信息userInfo中cookie是否为空
+        1、有cookie，跳过登录流程，直接构造loginData返回
+        2、没有cookie，需要post登录请求，获取到cookie存入数据库，再构造loginData返回
         Args:
             Session：Session对象
             present_website：当前网站名，用于数据库表名
             VPN：使用国内or国外代理
-            userInfo：用户信息
+            userInfo：用户信息  userInfo[0]:id [1]:username [2]passwod [3]:emial [4]:status [5]cookie
         Returns:
             成功返回loginData
                 loginData = {
@@ -124,10 +132,20 @@ class ScoopIt(object):
                     'cookie': cookie,
                 }
             失败返回状态值：
-                1:表示账号密码失效，密码被改或账号被网站删除
-                -1:表示requests请求页面失败，需要更换代理
-                -2:页面发生改变，获取不到页面上的一些token值
-                -3:数据库插入更新等错误
+                1:表示账号密码失效，密码被改或账号被网站删除，将数据库中状态改为1，并跳出循环重新取账号
+                0:跳出循环，重新取号
+                -1:连续代理错误或页面发生改变等取不到关键数据等，需要停止程序
+                -2:本次出错，不跳出循环
+        Mysql Update示例:
+            # 如果cookie失效，将该cookie从数据库中清除，并重新从数据库中获取登录账号密码
+            sql = "UPDATE %s SET cookie='%s' WHERE id=%s ;" % (scoop_it, save_cookies, user_id)
+            status = MysqlHandler().update(sql)
+            if status == 0:
+                g_var.logger.info("cookie失效，清除cookie update OK")
+                return {"error": -2}
+            else:
+                g_var.logger.error("数据库清除cookie错误!")
+                return {"error": 1}    
         """
 
         if userInfo[5] != None and userInfo[5] != "":
@@ -156,12 +174,12 @@ class ScoopIt(object):
             loginData：用户信息，包括user_id,username,password,cookie
             present_website：当前网站名，用于数据库表名
         Returns:
-            成功返回状态值：0
+            成功返回:"ok"
             失败返回状态值：
-                1:表示账号密码失效，密码被改或账号被网站删除
-                -1:表示requests请求页面失败，需要更换代理
-                -2:页面发生改变，获取不到页面上的一些token值
-                -3:数据库插入更新等错误
+                1:跳出循环，重新取号
+                0:cookie失效，将cookie清空，跳出循环重新取号
+                -1:连续代理错误或页面发生改变等取不到关键数据等，需要停止程序
+                -2:本次出错，继续循环
         """
         pass
 
@@ -177,43 +195,38 @@ class ScoopIt(object):
                 self.failed_count = self.failed_count + 1
                 continue
 
-            # @#$ 5、获取邮箱,如果不需要邮箱，这边改成传空值
             email_and_passwd = get_email(present_website)
             if email_and_passwd == -1:
                 self.failed_count = self.failed_count + 1
                 continue
+
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
                 registerData = self.__register_one(Session, present_website, email_and_passwd)
-                if registerData == -1:
-                    g_var.ERR_MSG = g_var.ERR_MSG+"|_|代理连续错误"
-                    g_var.logger.info("代理错误")
-                    retry_count=g_var.RETRY_COUNT_MAX
-                elif registerData == -2:
-                    g_var.logger.info("注册失败,可能是邮箱密码不符合要求、或ip被封等原因，请排查！")
-                    self.proxy_err_count = self.proxy_err_count + 1
-                    proxies = ip_proxy(VPN)
-                    if proxies == {"error": -1}:
-                        g_var.logger.info("获取代理错误")
-                        self.failed_count = self.failed_count + 1
-                    Session.proxies = proxies
-                elif registerData == 0:
-                    # 注册成功，但激活失败
-                    g_var.logger.info("注册成功,但激活失败！")
+                if registerData == 0:
+                    g_var.logger.info("注册失败，报错原因需要更换邮箱，跳出本循环")
+                    self.failed_count = self.failed_count + 1
                     break
+                elif registerData == -1:
+                    g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
+                    g_var.logger.info("代理连续错误")
+                    retry_count = g_var.RETRY_COUNT_MAX
+                elif registerData == -2:
+                    g_var.logger.info("注册失败，可能是邮箱密码不符合要求等原因，邮箱可以继续使用，不跳出循环")
+                    self.failed_count = self.failed_count + 1
+                    continue
                 else:
                     # 注册成功
                     self.success_count = self.success_count + 1
                     self.failed_count = 0
-                    self.proxy_err_count = 0
                     break
                 time.sleep(g_var.SLEEP_TIME)
 
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
-                g_var.ERR_MSG =  g_var.ERR_MSG+"|_|连续注册出错，程序停止"
+                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续注册出错，程序停止"
                 g_var.logger.error("连续注册失败！程序停止")
                 break
 
@@ -246,26 +259,37 @@ class ScoopIt(object):
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
-
-                loginData = self.__login(Session, present_website, VPN, userInfo)
-                if loginData == -1:
-                    # 代理问题，更换代理
-                    g_var.ERR_MSG = g_var.ERR_MSG+"|_|代理连续错误"
-                    g_var.logger.info("代理错误")
-                    retry_count=g_var.RETRY_COUNT_MAX
-                elif loginData == -2:
-                    # 账号异常，跳出本循环
+                loginData = self.login(Session, present_website, VPN, userInfo)
+                if loginData == 1:
+                    # 返回1表示登录失败，将数据库中的status改为异常
+                    g_var.logger.info('使用当前账号密码登录失败。。。')
+                    sql = "UPDATE" + present_website + "SET status=1 WHERE id=" + str(userInfo[0]) + ";"
+                    status = MysqlHandler().update(sql)
+                    if status == -1:
+                        return -1
                     self.failed_count = self.failed_count + 1
                     login_signal = 1
                     break
+                elif loginData == 0:
+                    self.failed_count = self.failed_count + 1
+                    login_signal = 1
+                    break
+                elif loginData == -1:
+                    # 代理问题，更换代理
+                    g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
+                    g_var.logger.info("代理错误")
+                    retry_count = g_var.RETRY_COUNT_MAX
+                elif loginData == -2:
+                    g_var.logger.info("登录失败，但可以使用此账户继续尝试，不跳出循环")
+                    self.failed_count = self.failed_count + 1
+                    continue
                 else:
                     self.failed_count = 0
-                    self.proxy_err_count = 0
                     break
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
-                g_var.ERR_MSG = g_var.ERR_MSG+"|_|连续登录出错，程序停止"
+                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续登录出错，程序停止"
                 g_var.logger.error("login:连续登录失败！程序停止")
                 break
             if login_signal == 1:
@@ -277,31 +301,33 @@ class ScoopIt(object):
                 time.sleep(g_var.SLEEP_TIME)
                 retry_count = retry_count + 1
                 status = self.__postMessage(Session, loginData, present_website)
-                if status == 0:  # 发文章成功
+                if status == 'ok':  # 发文章成功
                     self.success_count = self.success_count + 1
                     self.failed_count = 0
-                    self.proxy_err_count = 0
+                    break
+                elif status == 1:
+                    sql = "UPDATE " + present_website + " SET cookie='' WHERE id=" + str(loginData['id']) + ";"
+                    status = MysqlHandler().update(sql)
+                    if status == 0:
+                        g_var.logger.info("cookie失效，清除cookie update OK")
+                    else:
+                        g_var.logger.error("数据库清除cookie错误!")
+                    self.failed_count = self.failed_count + 1
+                    break
+                elif status == 0:
+                    self.failed_count = self.failed_count + 1
                     break
                 elif status == -1:
-                    # 返回值为-1，更换代理
-                    g_var.ERR_MSG = g_var.ERR_MSG+"|_|代理连续错误"
+                    g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
                     g_var.logger.info("代理错误")
-                    retry_count=g_var.RETRY_COUNT_MAX
+                    retry_count = g_var.RETRY_COUNT_MAX
                 elif status == -2:
-                    # 返回值为-1，某些必须停止的错误，程序停止
                     self.failed_count = self.failed_count + 1
-                    g_var.SPIDER_STATUS = 3
-                    break
-                elif status == -3:
-                    # 返回值为-1，数据库错误
-                    self.failed_count = self.failed_count + 1
-                elif status == -4:
-                    # 返回值为-4，cookie过期，跳出循环从开头重新取值
-                    break
+                    continue
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
-                g_var.ERR_MSG = g_var.ERR_MSG+"|_|连续发文章出错，程序停止"
+                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续发文章出错，程序停止"
                 g_var.logger.error("连续发文章出错，程序停止")
                 break
         g_var.logger.info("成功发送" + str(self.success_count) + "篇文章")
@@ -320,34 +346,43 @@ class ScoopIt(object):
                 continue
 
             # 1、注册
-            # 获取邮箱
             email_and_passwd = get_email(present_website)
             if email_and_passwd == -1:
                 self.failed_count = self.failed_count + 1
                 continue
+
             retry_count = 0
+            register_signal = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
                 registerData = self.__register_one(Session, present_website, email_and_passwd)
 
-                if registerData == -1:
-                    g_var.ERR_MSG = g_var.ERR_MSG+"|_|代理连续错误"
-                    g_var.logger.info("代理错误")
-                    retry_count=g_var.RETRY_COUNT_MAX
-                elif registerData == 0:
-                    # 注册成功，但激活失败
-                    g_var.logger.info("注册成功,但激活失败！")
+                if registerData == 0:
+                    g_var.logger.info("注册失败，报错原因需要更换邮箱，跳出本循环")
+                    self.failed_count = self.failed_count + 1
+                    register_signal = 1
                     break
+                elif registerData == -1:
+                    g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
+                    g_var.logger.info("代理错误")
+                    retry_count = g_var.RETRY_COUNT_MAX
+                elif registerData == -2:
+                    g_var.logger.info("注册失败，可能是邮箱密码不符合要求等原因，邮箱可以继续使用，不跳出循环")
+                    self.failed_count = self.failed_count + 1
+                    continue
                 else:
                     # 注册成功
                     self.failed_count = 0
                     break
+                time.sleep(g_var.SLEEP_TIME)
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
-                g_var.ERR_MSG =  g_var.ERR_MSG+"|_|连续注册出错，程序停止"
-                g_var.logger.error("start:连续注册失败！程序停止")
+                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续注册出错，程序停止"
+                g_var.logger.error("连续注册失败！程序停止")
                 break
+            if register_signal == 1:
+                continue
 
             # 2、登录
             Session = get_Session(VPN)
@@ -356,33 +391,46 @@ class ScoopIt(object):
                 continue
 
             # 构造一个userInfo
-            userInfo: tuple = (registerData['user_id'], registerData['user[login]'], registerData['user[password]'],
-                               registerData['user[email]'], '0', "")
+            userInfo: tuple = (registerData['id'], registerData['username'], registerData['password'],
+                               registerData['email'], '0', registerData['cookie'])
 
             login_signal = 0   # 记录状态，成功为0，失败为1
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
 
-                loginData = self.__login(Session, present_website, VPN, userInfo)
-                if loginData == -1:
-                    # 代理问题，更换代理
-                    g_var.ERR_MSG = g_var.ERR_MSG+"|_|代理连续错误"
-                    g_var.logger.info("代理错误")
-                    retry_count=g_var.RETRY_COUNT_MAX
-                elif loginData == -2:
-                    # 账号异常，跳出本循环
+                loginData = self.login(Session, present_website, VPN, userInfo)
+                if loginData == 1:
+                    # 返回1表示登录失败，将数据库中的status改为异常
+                    g_var.logger.info('使用当前账号密码登录失败。。。')
+                    sql = "UPDATE" + present_website + "SET status=1 WHERE id=" + str(userInfo[0]) + ";"
+                    status = MysqlHandler().update(sql)
+                    if status == -1:
+                        return -1
                     self.failed_count = self.failed_count + 1
                     login_signal = 1
                     break
+                elif loginData == 0:
+                    self.failed_count = self.failed_count + 1
+                    login_signal = 1
+                    break
+                elif loginData == -1:
+                    # 代理问题，更换代理
+                    g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
+                    g_var.logger.info("代理错误")
+                    retry_count = g_var.RETRY_COUNT_MAX
+                elif loginData == -2:
+                    g_var.logger.info("登录失败，但可以使用此账户继续尝试，不跳出循环")
+                    self.failed_count = self.failed_count + 1
+                    continue
                 else:
                     self.failed_count = 0
-                    self.proxy_err_count = 0
                     break
             if retry_count == g_var.RETRY_COUNT_MAX:
+                # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
-                g_var.ERR_MSG =  g_var.ERR_MSG+"|_|连续登录出错，程序停止"
-                g_var.logger.error("start:连续登录失败！程序停止")
+                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续登录出错，程序停止"
+                g_var.logger.error("连续登录失败！程序停止")
                 break
             if login_signal == 1:
                 continue
@@ -390,31 +438,36 @@ class ScoopIt(object):
             # 3、发文章
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
+                time.sleep(g_var.SLEEP_TIME)
                 retry_count = retry_count + 1
                 status = self.__postMessage(Session, loginData, present_website)
-                if status == 0:  # 发文章成功
+                if status == 'ok':  # 发文章成功
                     self.success_count = self.success_count + 1
                     self.failed_count = 0
-                    self.proxy_err_count = 0
+                    break
+                elif status == 1:
+                    sql = "UPDATE " + present_website + " SET cookie='' WHERE id=" + str(loginData['id']) + ";"
+                    status = MysqlHandler().update(sql)
+                    if status == 0:
+                        g_var.logger.info("cookie失效，清除cookie update OK")
+                    else:
+                        g_var.logger.error("数据库清除cookie错误!")
+                    self.failed_count = self.failed_count + 1
+                    break
+                elif status == 0:
+                    self.failed_count = self.failed_count + 1
                     break
                 elif status == -1:
-                    g_var.ERR_MSG = g_var.ERR_MSG+"|_|代理连续错误"
+                    g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
                     g_var.logger.info("代理错误")
-                    retry_count=g_var.RETRY_COUNT_MAX
+                    retry_count = g_var.RETRY_COUNT_MAX
                 elif status == -2:
-                    # 某些必须停止的错误，程序停止
                     self.failed_count = self.failed_count + 1
-                    g_var.SPIDER_STATUS = 3
-                    break
-                elif status == -3:
-                    self.failed_count = self.failed_count + 1
-                elif status == -4:
-                    # 返回值为-4，cookie过期，跳出循环从开头重新取值
-                    break
+                    continue
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
-                g_var.ERR_MSG = g_var.ERR_MSG+"|_|连续发文章出错，程序停止"
+                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续发文章出错，程序停止"
                 g_var.logger.error("连续发文章出错，程序停止")
                 break
-        g_var.logger.info("成功注册账户并发送文章" + str(self.success_count) + "篇")      
+        g_var.logger.info("成功注册账户并发送文章" + str(self.success_count) + "篇")

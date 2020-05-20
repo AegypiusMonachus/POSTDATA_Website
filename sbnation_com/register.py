@@ -1,91 +1,96 @@
-import requests
-import time
 import json
+import time
+import threading
+import sys
+sys.path.append('./')                 # 在SendArticle目录执行
+sys.path.append('/home/web_python/project/SendArticle')
 
-from sbnation_com.util import create_user
-
-# 获取session_id
-def get_session_id():
-    headers = {
-        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.113 Safari/537.36',
-    }
-    url = 'https://auth.voxmedia.com/signup?return_to=https://www.sbnation.com/'
-    res = requests.get(url, headers=headers, verify=False)
-    str_session = res.headers['Set-Cookie']
-    if not str_session:
-        print('获取Set-Cookie值失败。。。')
-        return -1
-    list_session = str_session.split(';')
-    if not list_session:
-        print('获取_session_id值失败。。。')
-        return -1
-    return list_session[0]
-
-# 人机身份验证码识别
-def get_captcha():
-    print("谷歌人机识别，等待30s")
-    data = {
-        'key': 'cb02438b4c9a94f746aa7bbd9477a834',
-        'method': 'userrecaptcha',
-        'googlekey': '6LefyhkTAAAAANpeEKwwgimNneiKWXRQtEqFZbat',
-        'pageurl': 'https://auth.voxmedia.com/signup?return_to=https://www.sbnation.com/',
-    }
-    url_captcha = 'https://2captcha.com/in.php'
-    res = requests.get(url_captcha, params=data, verify=False)
-    id_code = res.text.split("|")[1]
-    while True:
-        time.sleep(30)
-        url_code = "https://2captcha.com/res.php?key=cb02438b4c9a94f746aa7bbd9477a834&action=get&id=" + id_code
-        r = requests.get(url_code, verify=False)
-        code_list = r.text.split("|")
-        if len(code_list) != 2:
-            pass
-        else:
-            break
-    return code_list[1]
-
-def register():
-    recaptcha_response = get_captcha()
-    print(recaptcha_response)
-    session_id = get_session_id()
-    if session_id == -1:
-        print('未获取到_session_id值。。。')
-        return -1
-    headers = {
-        'accept': 'application/json, text/javascript, */*; q=0.01',
-        'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'origin': 'https://auth.voxmedia.com',
-        'referer': 'https://auth.voxmedia.com/signup?return_to=https://www.sbnation.com/',
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.113 Safari/537.36',
-        'x-requested-with': 'XMLHttpRequest',
-        'cookie': session_id,
-    }
-    username = create_user(8, 12)
-    password = create_user(10, 14)
-    email = username + '@hotmail.com'
-    data = {
-        'g-recaptcha-response': recaptcha_response,
-        'user[username]': username,
-        'user[password]': password,
-        'user[email]': email,
-        'user[newsletter]': 'false',
-        'community_id': '671',
-    }
-    print(data)
-
-    url = 'https://auth.voxmedia.com/chorus_auth/register.json'
-    res = requests.post(url, data=data, headers=headers, verify=False)
-    print(res.status_code)
-    print(res.text)
-    res_data = json.loads(res.text)
-    if res_data['success']:
-        print('注册成功。。。')
-        return 0
-    print('注册失败。。。')
-    return -1
+import psutil
+from sbnation_com.sbnation_com_util import SbnationCom
+from project_utils.project_util import get_command_line_arguments, get_global_params, send_spider_status, \
+    send_spider_block_status, MysqlHandler
+from project_utils import g_var
 
 
-if __name__ == '__main__':
-    register()
-    # get_session_id()
+if __name__ == "__main__":
+
+    present_website = "sbnation_com"
+    VPN = "en"
+
+    # 获取命令行传入参数
+    args = get_command_line_arguments()
+    g_var.ALL_COUNT = int(args.count)
+    g_var.INTERFACE_HOST = args.host
+    g_var.UUID = args.uuid
+
+    # 获取配置参数
+    get_global_params(present_website)
+
+    # 检查cpu和内存状态
+    while psutil.virtual_memory().percent > g_var.RAM_MAX or psutil.cpu_percent(None) > g_var.CPU_MAX:
+        g_var.logger.info("cpu或内存不足，挂起"+str(g_var.SEND_STATUS_INTERVAL)+"s")
+        g_var.SPIDER_STATUS = 1
+        close_signal = send_spider_block_status()
+        if close_signal == 1:
+            quit()
+        time.sleep(g_var.SEND_STATUS_INTERVAL)
+
+    # 在注册的主线程前，先取出数据库中最后的id存入config.json中，这样下次发文章开始取到的就是最新注册的账号
+    sql = "select * from "+present_website+" order by id DESC limit 1"
+    userInfo = MysqlHandler().select(sql)
+    if userInfo != None:
+        user_id = int(userInfo[0])
+    else:
+        user_id = 0
+
+    current_id = {"currentId": user_id}
+    with open(g_var.ENV_DIR+'/'+present_website+'/config.json', 'w') as f:
+        json.dump(current_id, f)
+
+    # 开始执行程序
+    g_var.SPIDER_STATUS = 2
+
+    # 考虑平均分配不是正好分的情况:例如94个任务分配给10个线程，先94/10取整，每个线程9个任务，剩余4个任务给前4个线程每个加1个任务
+    EACH_THREAD_ASSIGNMENT_NUM = int(g_var.ALL_COUNT / g_var.THREAD_COUNT)  # 每个线程分配的基本任务数量
+    ADD_ONE_ASSIGNMENT_THREAD_NUM = g_var.ALL_COUNT % g_var.THREAD_COUNT    # 需要增加一个任务的线程个数
+    REMAIN_THREAD_NUM = g_var.THREAD_COUNT - ADD_ONE_ASSIGNMENT_THREAD_NUM  # 剩余不用增加任务的线程个数
+    g_var.logger.info("EACH_THREAD_ASSIGNMENT_NUM" + str(EACH_THREAD_ASSIGNMENT_NUM))
+
+    # 创建一个对象列表
+    obj_list = []
+    for i in range(0, ADD_ONE_ASSIGNMENT_THREAD_NUM):
+        obj_list.append(SbnationCom(EACH_THREAD_ASSIGNMENT_NUM + 1))
+    if EACH_THREAD_ASSIGNMENT_NUM != 0:
+        for i in range(0, REMAIN_THREAD_NUM):
+            obj_list.append(SbnationCom(EACH_THREAD_ASSIGNMENT_NUM))
+
+    # 为每个对象开一个线程，加入到线程列表中统一管理
+    t_list = []
+    for i in range(0, len(obj_list)):
+        t = threading.Thread(target=obj_list[i].registers, args=(present_website, VPN))
+        t_list.append(t)
+
+    # 线程开始执行
+    for i in range(0, len(t_list)):
+        t_list[i].setDaemon(True)
+        t_list[i].start()
+
+    # 定时发送状态
+    close_send_status_signal = 0  # 发送消息的循环要等所有线程停止才能跳出循环
+    wait_signal = 0
+
+    while g_var.SPIDER_STATUS != 3 or close_send_status_signal != 1:
+        close_send_status_signal, wait_signal = send_spider_status(obj_list, t_list)
+        time.sleep(g_var.SEND_STATUS_INTERVAL)
+
+    if wait_signal == 0:
+        # 等待所有线程结束
+        g_var.logger.info("等待所有线程结束")
+        for i in range(0, len(t_list)):
+            t_list[i].join()
+    elif wait_signal == 1:
+        # 不等待其他线程结束，直接停止
+        g_var.logger.info("不等待其他线程结束，直接停止")
+
+    MysqlHandler().dbclose()     # 关闭数据库
+    g_var.logger.info("主线程结束！共计完成" + str(g_var.SUCCESS_COUNT) + "个\n\n\n\n\n")

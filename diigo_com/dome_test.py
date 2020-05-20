@@ -400,6 +400,7 @@ def register_one(Session=None) -> dict:
     # time.sleep(3)
 
     google_captchas=google_captcha("","6Ld23sMSAAAAALfyXkI9d0nHmzOH9jZZNuh66nql","https://www.diigo.com/sign-up?plan=free")
+    # google_captchas ="google_captchas"
     if google_captchas==-1:
         return "谷歌打码失败"
 
@@ -575,13 +576,13 @@ if __name__ == '__main__':
     # rlist = []
     # for i in range(15):
     #     # try:
-    #     r = register_one()
+    r = register_one()
     #     rlist.append(r)
     #     # except Exception as e:
     #     #     print(e)
     # print(rlist)
     # login()
-    send_article()
+    # send_article()
     # print(captcha())
     # print(MyEmail("poateslyskoi@hotmail.com", "Eli78lTE",'href="(https://www.diigo.com/user_mana2/register_verify/\w{32})"').execute_Start())
     # print(activate())

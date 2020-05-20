@@ -185,9 +185,8 @@ class IndiegogoCom(object):
         try:
             cookie = str(html.cookies.get_dict())
             success_user = json.loads(html.content)
-            sql = "INSERT INTO indiegogo_com(id, firstname, lastname, password, mail) VALUES('" + str(success_user['account']['id']) + \
-                  "', '" + success_user['account']['first_name'] + "', '" + success_user['account']['last_name'] + "', '" + \
-                  registerData['account']['password'] + "', '" + success_user['account']['email'] + "');"
+            sql = "INSERT INTO indiegogo_com(id, username, password, mail) VALUES('" + str(success_user['account']['id']) + \
+                  "', '" + success_user['account']['email'] + "', '" + registerData['account']['password'] + "', '" + success_user['account']['email'] + "');"
             last_row_id = MysqlHandler().insert(sql)
             userData = {}
             if last_row_id != -1:
@@ -259,7 +258,7 @@ class IndiegogoCom(object):
 
         g_var.logger.info("正在获取个人资料页数据...")
         url_personal_data = 'https://www.indiegogo.com/individuals/' + str(loginData["id"]) + '/edit'
-        html = requests.get(url_personal_data, cookies=eval(loginData['cookie']), headers=headers, timeout=g_var.TIMEOUT)
+        html = Session.get(url_personal_data, cookies=eval(loginData['cookie']), headers=headers, timeout=g_var.TIMEOUT)
         if html == -1:
             return html
 
@@ -307,7 +306,7 @@ class IndiegogoCom(object):
                 return 0
             return loginData
         else:
-            g_var.logger.error("链接发送失败！\n" + html.status_code)
+            g_var.logger.error("链接发送失败！..." + str(html.status_code))
             g_var.ERR_CODE = 5000
             g_var.ERR_MSG = g_var.ERR_MSG + "|_|" + "链接发送失败，未知错误!"
             return 0
@@ -552,7 +551,7 @@ class IndiegogoCom(object):
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
-                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续注册出错，程序停止"
+                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续发链接出错，程序停止"
                 g_var.logger.error("连续发链接出错，程序停止")
                 break
         g_var.logger.info("成功注册账户并发送链接" + str(self.success_count) + "个。")

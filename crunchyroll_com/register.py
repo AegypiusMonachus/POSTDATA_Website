@@ -98,7 +98,6 @@ def register(register_num):
         if sucsess_sign in result:
             db = connect_database()
             cursor = db.cursor()
-
             sql = "INSERT INTO mee_nu(username, password, mail, status) VALUES('" + postData['name'] + \
                   "', '" + postData['password'] + "', '" + postData['mail'] + "', '" + str(0) + "');"
             try:

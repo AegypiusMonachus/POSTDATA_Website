@@ -5,7 +5,7 @@ import sys
 import random
 import threading
 import time
-
+from lxml import etree
 import email
 import imaplib
 import requests
@@ -21,43 +21,49 @@ from project_utils import g_var
 
 
 def generate_headers(signal: int, cookie=""):
+    user_agent = ""
+    retry_count = 0
+    while retry_count < g_var.RETRY_COUNT_MAX:
+        retry_count = retry_count + 1
+        time.sleep(g_var.SLEEP_TIME)
+        try:
+            headers = {
+                'Connection': 'close',
+            }
+            requests.adapters.DEFAULT_RETRIES = g_var.DEFAULT_RETRIES
+            with requests.get(url=g_var.INTERFACE_HOST + "/v1/get/user_agent/", headers=headers, timeout=g_var.TIMEOUT) as r:
+                user_agent = r.text
+                break
+        except:
+            g_var.ERR_CODE = 2005
+            g_var.ERR_MSG = g_var.ERR_MSG + "|_|" + "user_agent获取失败!"
+            g_var.logger.error("user_agent获取失败!")
 
-    try:
-        # user_agent = requests.get(url=g_var.INTERFACE_HOST + "/v1/get/user_agent/", timeout=g_var.TIMEOUT).text
-        headers = {
-            'Connection': 'close',
-        }
-        requests.adapters.DEFAULT_RETRIES = g_var.DEFAULT_RETRIES
-        with requests.get(url=g_var.INTERFACE_HOST + "/v1/get/user_agent/", headers=headers, timeout=g_var.TIMEOUT) as r:
-            user_agent = r.text
-    except:
-        g_var.ERR_CODE = 2005
-        g_var.ERR_MSG = g_var.ERR_MSG + "|_|" + "user_agent获取失败!"
-        g_var.logger.error("user_agent获取失败!")
+    if user_agent == "":
+        g_var.logger.info("获取user_agent异常，退出程序！")
         return -1
-
-    if signal == 0:
-        #使用固定header
-        headers = {
-            'Host': 'knowyourmeme.com',
-            'Origin': 'https://knowyourmeme.com',
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'User-Agent': user_agent,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
-            'Referer': 'https://knowyourmeme.com/login',
-        }
-    elif signal == 1:
-        g_var.logger.info(cookie)
-        #添加cookie
-        headers = {
-            'Host': 'knowyourmeme.com',
-            'Origin': 'https://knowyourmeme.com',
-            'User-Agent': user_agent,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
-            'Referer': 'https://knowyourmeme.com/memes/new',
-            'Cookie': cookie,
-        }
-    return headers
+    else:
+        if signal == 0:
+            #使用固定header
+            headers = {
+                'Host': 'knowyourmeme.com',
+                'Origin': 'https://knowyourmeme.com',
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'User-Agent': user_agent,
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
+                'Referer': 'https://knowyourmeme.com/login',
+            }
+        elif signal == 1:
+            #添加cookie
+            headers = {
+                'Host': 'knowyourmeme.com',
+                'Origin': 'https://knowyourmeme.com',
+                'User-Agent': user_agent,
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
+                'Referer': 'https://knowyourmeme.com/memes/new',
+                'Cookie': cookie,
+            }
+        return headers
 
 
 def generate_random_theme() -> str:
@@ -164,6 +170,7 @@ def get_know_your_meme_session(Session, url):
 
     if res.status_code != 200:
         g_var.logger.info('网页打开失败...')
+        g_var.logger.info(res.text)
         return -1, -1, -1
     # data-sitekey="6LcODxcTAAAAAHCbB6GzPdQij8_hq7qcaVcM94FP"
     # 用于Google人机身份验证
@@ -216,14 +223,14 @@ def get_authenticity_token(Session, url, cookie=""):
     try:
         g_var.logger.info("获取_know_your_meme_session值")
         res = Session.get(url, headers=headers, timeout=g_var.TIMEOUT)
+
     except:
         g_var.logger.info("获取_know_your_meme_session超时")
         return -1
 
-    g_var.logger.info(res.status_code)
-    # g_var.logger.info(res.text)
     token = re.findall('name="authenticity_token" type="hidden" value="(.*?)"', res.text)
     if not token:
+        g_var.logger.info("get_authenticity_token:" + res.text)
         g_var.logger.info('页面获取错误，找不到authenticity_token值...')
         g_var.ERR_CODE = 5000
         g_var.ERR_MSG = g_var.ERR_MSG + '页面获取错误，找不到authenticity_token值...'
@@ -317,6 +324,7 @@ def get_article():
         return -1, -1
     title = article[0]
     text_content = article[1]
+
     content = re.sub(r'<.*?>', '',re.sub('<a href="(.*?)" target="_blank">([\s\S]*?)</a>', "|_|[md5url]|_|", text_content))
     final_content = content.split('|_|')
     a_list = re.findall('<a href="(.*?)" target="_blank">([\s\S]*?)</a>', text_content)
@@ -345,7 +353,7 @@ def get_article():
     return title, body
 
 
-def account_activation(Session, email_and_passwd, email_verify_obj, headers):
+def account_activation(Session, email_and_passwd, email_verify_obj, headers, username):
     """
     注册成功后去邮箱激活账户
     Args:
@@ -370,25 +378,43 @@ def account_activation(Session, email_and_passwd, email_verify_obj, headers):
     #     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.113 Safari/537.36',
     #     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
     # }
+
     result = Session.get(verify_url, headers=headers)
+
     prove = 'Invalid activation code or user previously activated.'
     if prove in result.text:
         g_var.logger.info('新注册账号未通过验证。。。')
         return -1
+
+    # 确保激活成功
+    activate_prove_url = "https://knowyourmeme.com/users/" + username
+    result = Session.get(activate_prove_url, headers=headers)
+    prove = "Please activate your account."
+    while prove in result.text:
+        g_var.logger.info("激活未成功，再次激活...")
+        result = Session.get(verify_url, headers=headers)
+        time.sleep(g_var.SLEEP_TIME)
+        result = Session.get(activate_prove_url, headers=headers)
+
     g_var.logger.info('新注册账号通过验证，接下来自由使用。。。')
     return result
 
 # 修改个人资料页的个人网址
-def edit_personal_website(Session, know_your_meme_session, authenticity_token, name):
+def edit_personal_website(Session, loginData):
     headers = {
         'Host': 'knowyourmeme.com',
         'Origin': 'https://knowyourmeme.com',
         'Content-Type': 'application/x-www-form-urlencoded',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.122 Safari/537.36',
-        'Referer': 'https://knowyourmeme.com/users/'+name.lower()+'/edit',
-        'Cookie': know_your_meme_session,
+        'Referer': 'https://knowyourmeme.com/users/'+loginData["username"].lower()+'/edit',
+        'Cookie': loginData["cookie"],
     }
+    url = 'https://knowyourmeme.com/users/' + loginData["username"].lower()
+    authenticity_token = get_authenticity_token(Session, url)
+    if authenticity_token == -1:
+        return -1
+
     link = get_link()
     if link == -1:
         g_var.logger.info('链接无法获取到...')
@@ -397,7 +423,7 @@ def edit_personal_website(Session, know_your_meme_session, authenticity_token, n
         'utf8': '✓',
         '_method': 'put',
         'authenticity_token': authenticity_token,
-        'profile[email]': 'soaneatqapc@hotmail.com',
+        'profile[email]': loginData["email"],
         'profile[first_name]': '',
         'profile[last_name]': '',
         'profile[location]': '',
@@ -412,17 +438,22 @@ def edit_personal_website(Session, know_your_meme_session, authenticity_token, n
         'profile[youtube_profile]': '',
         'commit': 'Submit',
     }
-    url = 'https://knowyourmeme.com/users/'+name.lower()
-
 
     g_var.logger.info("提交个人资料中...")
     result = Session.post(url, data=data, headers=headers, timeout=g_var.TIMEOUT)
+
     if result == -1:
-        g_var.logger.error("提交注册信息超时")
+        g_var.logger.error("提交个人资料超时")
         return -1
 
+    cookie_failure_signal = "Please login to access this page."
+    text = result.text
+    if cookie_failure_signal in text:
+        # 如果cookie失效，将该cookie从数据库中清除，并重新从数据库中获取登录账号密码
+        return 1
+
     if link not in result.text:
-        g_var.logger.info('修改个人资料页的网址失败...')
+        g_var.logger.info('修改个人资料页的网址失败...'+result.text)
         return -1
     return link
 
@@ -575,7 +606,7 @@ class KnowyourmemeCom(object):
             注册成功返回注册数据registerData
             注册失败返回状态码
             0：某些报错需要跳出循环，更换邮箱
-            -1:连续代理错误，停止程序
+            -1:连连续代理错误等，需要停止程序
             -2:注册失败，可能是邮箱密码不符合要求等原因，邮箱可以继续使用，不跳出循环
         """
 
@@ -623,6 +654,11 @@ class KnowyourmemeCom(object):
             g_var.logger.error("提交注册信息超时")
             return -1
 
+        ip_banned_signal = "Sorry, your IP address has been banned."
+        if ip_banned_signal in result.text:
+            g_var.logger.info('Sorry, your IP address has been banned.')
+            return -2
+
         # 检测注册是否成功，看页面是否包含"Not Yet Activated"
         first_prove = 'Not Yet Activated'
         if first_prove not in result.text:
@@ -632,7 +668,7 @@ class KnowyourmemeCom(object):
 
         # 新注册账号使用注册邮箱进行激活：
         email_verify_obj = HotmailVerification()
-        second_prove = account_activation(Session, email_and_passwd, email_verify_obj, headers)
+        second_prove = account_activation(Session, email_and_passwd, email_verify_obj, headers, name)
         if second_prove == -1:
             g_var.logger.info('激活失败。。。')
             return 0
@@ -649,30 +685,31 @@ class KnowyourmemeCom(object):
                 g_var.logger.error("数据库插入用户注册数据失败")
                 return 0
 
-    def __login(self, Session, present_website: str, VPN, userInfo):
+    def login(self, Session, present_website: str, VPN, userInfo):
         """
         登录
         根据用户信息userInfo中是否包含cookie
         1、有cookie直接构造loginData返回，跳过登录流程
-        2、没有cookie，需要post登录请求，获取到cookie，再构造loginData返回
+        2、没有cookie，需要post登录请求，获取到cookie存入数据库，再构造loginData返回
         Args:
             Session：Session对象
             present_website：当前网站名，用于数据库表名
             VPN：使用国内or国外代理
-            userInfo：用户信息
+            userInfo：数据库中取出的用户信息，[0]:id,[1]:username,[2]:password,[3]:email,[4]:status,[5]:cookie
         Returns:
             成功返回loginData
                 loginData = {
                     'id': user_id,
                     'username': username,
                     'password': password,
+                    'email': email,
                     'cookie': cookie,
                 }
             失败返回状态值：
-                1:表示账号密码失效，密码被改或账号被网站删除
-                -1:连续代理错误，停止程序
-                -2:页面发生改变，获取不到页面上的一些token值
-                -3:数据库插入更新等错误
+                1:表示账号密码失效，密码被改或账号被网站删除，将数据库中状态改为1，并重新取账号
+                0:跳出循环，重新取号
+                -1:连续代理错误等，需要停止程序
+                -2:某些异常造成的退出，不需要换账号，在循环中重新执行(如数据库插入更新等错误)
         """
 
         if userInfo[5] != None and userInfo[5] != "":
@@ -681,11 +718,13 @@ class KnowyourmemeCom(object):
             user_id = userInfo[0]
             username = userInfo[1]
             password = userInfo[2]
+            email = userInfo[3]
             cookie = userInfo[5]
             loginData = {
                 'id': user_id,
                 'username': username,
                 'password': password,
+                'email': email,
                 'cookie': cookie,
             }
             return loginData
@@ -693,12 +732,9 @@ class KnowyourmemeCom(object):
             # cookie为空，使用账号密码登录
             url = 'https://knowyourmeme.com/login'
             authenticity_token = get_authenticity_token(Session, url)
-            if authenticity_token == -1:
-                # 重新获取代理
+            if authenticity_token == -1 or authenticity_token == -2:
+                # 代理错误 或 authenticity_token获取异常，退出程序
                 return -1
-            elif authenticity_token == -2:
-                # authenticity_token获取异常，退出程序
-                return -2
             else:
                 data = {
                     'utf8': '✓',
@@ -710,32 +746,25 @@ class KnowyourmemeCom(object):
                 }
 
                 url = 'https://knowyourmeme.com/sessions'
-                headers = -1
-                while headers == -1:
-                    headers = generate_headers(0)
-                    if headers == -1:
-                        self.failed_count = self.failed_count + 1
-                        time.sleep(g_var.SLEEP_TIME)
+
+                headers = generate_headers(0)
+                if headers == -1:
+                    return -1
 
                 g_var.logger.info("账号登录中...")
                 result = Session.post(url, data=data, headers=headers, timeout=g_var.TIMEOUT)
-                g_var.logger.info(result.status_code)
                 if result == -1:
-                    g_var.logger.error("登录超时")
+                    g_var.logger.error("代理出错，登录超时")
                     return -1
 
                 login_fail_signal = 'login failed'
                 if login_fail_signal in result.text:
-                    g_var.logger.info('使用当前账号密码登录失败。。。')
-                    # 如果登录失败将数据库中的status改为异常
-                    sql = "UPDATE"+present_website+"SET status=1 WHERE id=" + str(userInfo[0]) + ";"
-                    MysqlHandler().update(sql)
                     return 1
 
                 session_list = re.findall('_know_your_meme_session=(.*?);', result.headers['Set-Cookie'])
                 if not session_list:
                     g_var.logger.info('登录页面异常，找不到_know_your_meme_session')
-                    return -2
+                    return -1
 
                 # 获取cookie，保存到数据库。
                 cookie = '_know_your_meme_session='+session_list[0]
@@ -745,16 +774,18 @@ class KnowyourmemeCom(object):
                     g_var.logger.info("update cookie OK")
                 else:
                     g_var.logger.error("数据库更新cookie错误!")
-                    return 1
+                    return -2
 
                 user_id = userInfo[0]
                 username = userInfo[1]
                 password = userInfo[2]
+                email = userInfo[3]
 
                 loginData = {
                     'id': user_id,
                     'username': username,
                     'password': password,
+                    'email': email,
                     'cookie': cookie
                 }
                 return loginData
@@ -767,41 +798,36 @@ class KnowyourmemeCom(object):
             loginData：用户信息，包括user_id,username,password,cookie
             present_website：当前网站名，用于数据库表名
         Returns:
-            成功返回状态值：0
+            成功返回:"ok"
             失败返回状态值：
-                1:表示账号密码失效，密码被改或账号被网站删除
-                -1:连续代理错误，停止程序
-                -2:页面发生改变，获取不到页面上的一些token值
-                -3:数据库插入更新等错误
-                -4：cookie过期
+                1:cookie失效，将cookie清空，跳出循环重新取号
+                0:跳出循环，重新取号
+                -1:连续代理错误或页面发生改变等取不到关键数据等，需要停止程序
+                -2:本次出错，继续循环
         """
         # 发送文章，文章标题不可重复，文章发布间隔为15分钟（目前看出应该是同一IP下，而不是一个账号下发布文章间隔）
         res_picture = get_picture()
         if res_picture == -1:
             g_var.logger.info('无法获取图片...')
-            return -1
+            return -2
 
         link = get_link()
         if link == -1:
             g_var.logger.info('无法获取链接...')
-            return -1
+            return -2
 
         title, body = get_article()
+        title = title+str(random.randint(1, 10000000))
         if body == -1:
             g_var.logger.info('无法获取文章正文...')
-            return -1
-
-        name = create_user(8, 12)
-        g_var.logger.info('name:'+name)
+            return -2
 
         url = "https://knowyourmeme.com/memes/new"
         authenticity_token = get_authenticity_token(Session, url, loginData["cookie"])
-        if authenticity_token == -1:
-            # 重新获取代理
+        if authenticity_token == -1 or authenticity_token == -2:
+            # 代理错误或authenticity_token获取异常，退出程序
             return -1
-        elif authenticity_token == -2:
-            # authenticity_token获取异常，退出程序
-            return -2
+
         # g_var.logger.info(title)
         # 用于设置entry[other_resource_title]值：一个大写字母
         a_str = string.ascii_uppercase
@@ -809,7 +835,7 @@ class KnowyourmemeCom(object):
             fields={
                 'utf8': '✓',
                 'authenticity_token': authenticity_token,
-                'entry[name]': name,
+                'entry[name]': title,
                 'entry[icon]': (threading.currentThread().name+'.jpg', open(g_var.ENV_DIR + '/captcha/knowyourmeme_com/'+threading.currentThread().name+'.jpg', 'rb'), 'image/jpeg'),
                 'entry[category_id]': '60',
                 'entry[entry_type_ids][]': '',
@@ -840,12 +866,10 @@ class KnowyourmemeCom(object):
             boundary='----WebKitFormBoundary' + create_boundary(),
         )
 
-        headers = -1
-        while headers == -1:
-            headers = generate_headers(1, loginData['cookie'])
-            if headers == -1:
-                self.failed_count = self.failed_count + 1
-                time.sleep(g_var.SLEEP_TIME)
+        headers = generate_headers(1, loginData['cookie'])
+        if headers == -1:
+            self.failed_count = self.failed_count + 1
+            return -1
 
         headers['Content-Type'] = multipart_encoder.content_type
         url = 'https://knowyourmeme.com/memes'
@@ -856,32 +880,40 @@ class KnowyourmemeCom(object):
             g_var.logger.error("文章发送超时")
             return -1
 
-        g_var.logger.info(result.text)
-        cookie_failure_signal = "Please login to access this page. "
-        if cookie_failure_signal in result.text:
+        cookie_failure_signal = "Please login to access this page."
+        text = result.text
+        if cookie_failure_signal in text:
             # 如果cookie失效，将该cookie从数据库中清除，并重新从数据库中获取登录账号密码
-            sql = "UPDATE "+present_website+" SET cookie='' WHERE id=" + str(loginData['id']) + ";"
-            status = MysqlHandler().update(sql)
-            if status == 0:
-                g_var.logger.info("cookie失效，清除cookie update OK")
-                return -1
-            else:
-                g_var.logger.error("数据库清除cookie错误!")
-                return 1
+            return 1
 
         prove = 'Failed to create new entry.'
-        if prove in result.text:
-            g_var.logger.info('文章发送失败...')
-            return 1
-        new_article_url = get_new_article_url(Session, loginData["cookie"], name)
+        if prove in text:
+            xpath_text = "//div[@id='main-content']/div[@class='callout callout-danger']/ul/li[1]/text()"
+            html = etree.HTML(text)
+            error = html.xpath(xpath_text)[0]
+            g_var.ERR_MSG = g_var.ERR_MSG + "|_|" + str(error)
+            g_var.logger.info('文章发送失败...'+str(error))
+            return 0
+
+        prove = "You may only submit an entry every 15 minutes."
+        if prove in text:
+            g_var.ERR_MSG = g_var.ERR_MSG + "|_|" + prove
+            g_var.logger.info('文章发送失败...' + prove)
+            return 0
+
+        new_article_url = get_new_article_url(Session, loginData["cookie"], title)
         g_var.logger.info(new_article_url)
         if new_article_url == -1:
+            ip_banned_signal = "has been banned."
+            if ip_banned_signal in text:
+                return -3
+            g_var.logger.info(text)
             g_var.logger.info('新文章发送失败...')
-            return 1
+            return 0
         else:
             # 将文章链接、标题、用户存入article表
             sql = "INSERT INTO "+present_website+"_article(url, keyword, user_id) VALUES('" + new_article_url + "', '" \
-                  + name + "', '" + str(loginData['id']) + "');"
+                  + title + "', '" + str(loginData['id']) + "');"
 
             if g_var.insert_article_lock.acquire():
                 last_row_id = MysqlHandler().insert(sql)
@@ -891,12 +923,21 @@ class KnowyourmemeCom(object):
                 g_var.logger.info("insert article OK")
             else:
                 g_var.logger.error("数据库插入文章错误!")
-                return -3
+                return 0
+        return "ok"
 
-        personal_link = edit_personal_website(Session, loginData["cookie"], authenticity_token, loginData["username"])
+    def __send_profile(self, Session, loginData: dict):
+        personal_link = edit_personal_website(Session, loginData)
         g_var.logger.info(personal_link)
         if personal_link == -1:
+            g_var.logger.info('修改个人资料页时代理有问题...')
+            return -1
+        elif personal_link == 1:
+            g_var.logger.info('cookie过期')
+            return 1
+        elif personal_link == -2:
             g_var.logger.info('未能成功修改个人资料页的网址...')
+            return -2
         return 0
 
     def registers(self, present_website: str, VPN: str):
@@ -916,25 +957,25 @@ class KnowyourmemeCom(object):
             if email_and_passwd == -1:
                 self.failed_count = self.failed_count + 1
                 continue
+
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
                 registerData = self.__register_one(Session, present_website, email_and_passwd)
-                if registerData == -1:
+                if registerData == 0:
+                    g_var.logger.info("注册失败，报错原因需要更换邮箱，跳出本循环")
+                    self.failed_count = self.failed_count + 1
+                    break
+                elif registerData == -1:
                     g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
-                    g_var.logger.info("代理错误")
+                    g_var.logger.info("代理连续错误")
                     retry_count = g_var.RETRY_COUNT_MAX
                 elif registerData == -2:
-                    g_var.logger.info("注册失败,可能是邮箱密码不符合要求、或ip被封等原因，请排查！")
+                    g_var.logger.info("注册失败，可能是邮箱密码不符合要求等原因，邮箱可以继续使用，不跳出循环")
                     proxies = ip_proxy(VPN)
-                    if proxies == {"error": -1}:
-                        g_var.logger.info("获取代理错误")
-                        self.failed_count = self.failed_count + 1
                     Session.proxies = proxies
-                elif registerData == 0:
-                    # 注册成功，但激活失败
-                    g_var.logger.info("注册成功,但激活失败！")
-                    break
+                    self.failed_count = self.failed_count + 1
+                    continue
                 else:
                     # 注册成功
                     self.success_count = self.success_count + 1
@@ -978,18 +1019,30 @@ class KnowyourmemeCom(object):
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
-
-                loginData = self.__login(Session, present_website, VPN, userInfo)
-                if loginData == -1:
+                loginData = self.login(Session, present_website, VPN, userInfo)
+                if loginData == 1:
+                    # 返回1表示登录失败，将数据库中的status改为异常
+                    g_var.logger.info('使用当前账号密码登录失败。。。')
+                    sql = "UPDATE " + present_website + " SET status=1 WHERE id=" + str(userInfo[0]) + ";"
+                    status = MysqlHandler().update(sql)
+                    if status == -1:
+                        return -1
+                    self.failed_count = self.failed_count + 1
+                    login_signal = 1
+                    break
+                elif loginData == 0:
+                    self.failed_count = self.failed_count + 1
+                    login_signal = 1
+                    break
+                elif loginData == -1:
                     # 代理问题，更换代理
                     g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
                     g_var.logger.info("代理错误")
                     retry_count = g_var.RETRY_COUNT_MAX
                 elif loginData == -2:
-                    # 账号异常，跳出本循环
+                    g_var.logger.info("登录失败，但可以使用此账户继续尝试，不跳出循环")
                     self.failed_count = self.failed_count + 1
-                    login_signal = 1
-                    break
+                    continue
                 else:
                     self.failed_count = 0
                     break
@@ -1008,25 +1061,34 @@ class KnowyourmemeCom(object):
                 time.sleep(g_var.SLEEP_TIME)
                 retry_count = retry_count + 1
                 status = self.__postMessage(Session, loginData, present_website)
-                if status == 0:  # 发文章成功
+                if status == 'ok':  # 发文章成功
                     self.success_count = self.success_count + 1
                     self.failed_count = 0
                     break
+                elif status == 1:
+                    sql = "UPDATE " + present_website + " SET cookie='' WHERE id=" + str(loginData['id']) + ";"
+                    status = MysqlHandler().update(sql)
+                    if status == 0:
+                        g_var.logger.info("cookie失效，清除cookie update OK")
+                    else:
+                        g_var.logger.error("数据库清除cookie错误!")
+                    self.failed_count = self.failed_count + 1
+                    break
+                elif status == 0:
+                    self.failed_count = self.failed_count + 1
+                    break
                 elif status == -1:
-                    # 返回值为-1，更换代理
                     g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
                     g_var.logger.info("代理错误")
                     retry_count = g_var.RETRY_COUNT_MAX
                 elif status == -2:
-                    # 返回值为-2，某些必须停止的错误，程序停止
                     self.failed_count = self.failed_count + 1
-                    g_var.SPIDER_STATUS = 3
-                    break
+                    continue
                 elif status == -3:
                     self.failed_count = self.failed_count + 1
-                elif status == -4:
-                    # 返回值为-4，cookie过期，重新取值
-                    break
+                    proxies = ip_proxy(VPN)
+                    Session.proxies = proxies
+                    continue
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
@@ -1034,6 +1096,147 @@ class KnowyourmemeCom(object):
                 g_var.logger.error("连续发文章出错，程序停止")
                 break
         g_var.logger.info("成功发送" + str(self.success_count) + "篇文章")
+
+    def registerAndSendProfile(self, present_website, VPN: str):
+        while self.success_count < self.assignment_num:
+            # 每次循环检测当前错误状态
+            if self.__monitor_status() == -1:
+                break
+            self.now_count = self.now_count + 1
+
+            # 设置Session对象
+            Session = get_Session(VPN)
+            if Session == -1:
+                self.failed_count = self.failed_count + 1
+                continue
+
+            # 1、注册
+            # 获取邮箱
+            email_and_passwd = get_email(present_website)
+            if email_and_passwd == -1:
+                self.failed_count = self.failed_count + 1
+                continue
+
+            retry_count = 0
+            register_signal = 0
+            while retry_count < g_var.RETRY_COUNT_MAX:
+                retry_count = retry_count + 1
+                registerData = self.__register_one(Session, present_website, email_and_passwd)
+
+                if registerData == 0:
+                    g_var.logger.info("注册失败，报错原因需要更换邮箱，跳出本循环")
+                    self.failed_count = self.failed_count + 1
+                    register_signal = 1
+                    break
+                elif registerData == -1:
+                    g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
+                    g_var.logger.info("代理错误")
+                    retry_count = g_var.RETRY_COUNT_MAX
+                elif registerData == -2:
+                    g_var.logger.info("注册失败，可能是邮箱密码不符合要求等原因，邮箱可以继续使用，不跳出循环")
+                    proxies = ip_proxy(VPN)
+                    Session.proxies = proxies
+                    self.failed_count = self.failed_count + 1
+                    continue
+                else:
+                    # 注册成功
+                    self.failed_count = 0
+                    break
+                time.sleep(g_var.SLEEP_TIME)
+            if retry_count == g_var.RETRY_COUNT_MAX:
+                # 连续出错说明发生了一些问题，需要停止程序
+                g_var.SPIDER_STATUS = 3
+                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续注册出错，程序停止"
+                g_var.logger.error("连续注册失败！程序停止")
+                break
+            if register_signal == 1:
+                continue
+
+            # 2、登录
+            Session = get_Session(VPN)
+            if Session == -1:
+                self.failed_count = self.failed_count + 1
+                continue
+
+            # 构造一个userInfo
+            userInfo: tuple = (registerData['user_id'], registerData['user[login]'], registerData['user[password]'],
+                               registerData['user[email]'], '0', "")
+
+            login_signal = 0  # 记录状态，成功为0，失败为1
+            retry_count = 0
+            while retry_count < g_var.RETRY_COUNT_MAX:
+                retry_count = retry_count + 1
+
+                loginData = self.login(Session, present_website, VPN, userInfo)
+                if loginData == 1:
+                    # 返回1表示登录失败，将数据库中的status改为异常
+                    g_var.logger.info('使用当前账号密码登录失败。。。')
+                    sql = "UPDATE " + present_website + " SET status=1 WHERE id=" + str(userInfo[0]) + ";"
+                    status = MysqlHandler().update(sql)
+                    if status == -1:
+                        return -1
+                    self.failed_count = self.failed_count + 1
+                    login_signal = 1
+                    break
+                elif loginData == 0:
+                    self.failed_count = self.failed_count + 1
+                    login_signal = 1
+                    break
+                elif loginData == -1:
+                    # 代理问题，更换代理
+                    g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
+                    g_var.logger.info("代理错误")
+                    retry_count = g_var.RETRY_COUNT_MAX
+                elif loginData == -2:
+                    g_var.logger.info("登录失败，但可以使用此账户继续尝试，不跳出循环")
+                    self.failed_count = self.failed_count + 1
+                    continue
+                else:
+                    self.failed_count = 0
+                    break
+            if retry_count == g_var.RETRY_COUNT_MAX:
+                # 连续出错说明发生了一些问题，需要停止程序
+                g_var.SPIDER_STATUS = 3
+                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续登录出错，程序停止"
+                g_var.logger.error("连续登录失败！程序停止")
+                break
+            if login_signal == 1:
+                continue
+
+            # 3、发个人简介
+            retry_count = 0
+            while retry_count < g_var.RETRY_COUNT_MAX:
+                time.sleep(g_var.SLEEP_TIME)
+                retry_count = retry_count + 1
+                status = self.__send_profile(Session, loginData)
+                if status == 0:  # 发个人简介成功
+                    self.success_count = self.success_count + 1
+                    self.failed_count = 0
+                    break
+                elif status == -1:
+                    # 代理问题，更换代理
+                    g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
+                    g_var.logger.info("代理错误")
+                    retry_count = g_var.RETRY_COUNT_MAX
+                elif status == -2:
+                    self.failed_count = self.failed_count + 1
+                    break
+                elif status == 1:
+                    sql = "UPDATE " + present_website + " SET cookie='' WHERE id=" + str(loginData['id']) + ";"
+                    status = MysqlHandler().update(sql)
+                    if status == 0:
+                        g_var.logger.info("cookie失效，清除cookie update OK")
+                    else:
+                        g_var.logger.error("数据库清除cookie错误!")
+                    self.failed_count = self.failed_count + 1
+                    break
+            if retry_count == g_var.RETRY_COUNT_MAX:
+                # 连续出错说明发生了一些问题，需要停止程序
+                g_var.SPIDER_STATUS = 3
+                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续发文章出错，程序停止"
+                g_var.logger.error("连续发文章出错，程序停止")
+                break
+        g_var.logger.info("成功发送" + str(self.success_count) + "个个人简介")
 
     def start(self, present_website, VPN):
         while self.success_count < self.assignment_num:
@@ -1054,29 +1257,41 @@ class KnowyourmemeCom(object):
             if email_and_passwd == -1:
                 self.failed_count = self.failed_count + 1
                 continue
+
             retry_count = 0
+            register_signal = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
                 registerData = self.__register_one(Session, present_website, email_and_passwd)
 
-                if registerData == -1:
+                if registerData == 0:
+                    g_var.logger.info("注册失败，报错原因需要更换邮箱，跳出本循环")
+                    self.failed_count = self.failed_count + 1
+                    register_signal = 1
+                    break
+                elif registerData == -1:
                     g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
                     g_var.logger.info("代理错误")
                     retry_count = g_var.RETRY_COUNT_MAX
-                elif registerData == 0:
-                    # 注册成功，但激活失败
-                    g_var.logger.info("注册成功,但激活失败！")
-                    break
+                elif registerData == -2:
+                    g_var.logger.info("注册失败，可能是邮箱密码不符合要求等原因，邮箱可以继续使用，不跳出循环")
+                    proxies = ip_proxy(VPN)
+                    Session.proxies = proxies
+                    self.failed_count = self.failed_count + 1
+                    continue
                 else:
                     # 注册成功
                     self.failed_count = 0
                     break
+                time.sleep(g_var.SLEEP_TIME)
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
                 g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续注册出错，程序停止"
                 g_var.logger.error("连续注册失败！程序停止")
                 break
+            if register_signal == 1:
+                continue
 
             # 2、登录
             Session = get_Session(VPN)
@@ -1093,23 +1308,38 @@ class KnowyourmemeCom(object):
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
 
-                loginData = self.__login(Session, present_website, VPN, userInfo)
-                if loginData == -1:
+                loginData = self.login(Session, present_website, VPN, userInfo)
+                if loginData == 1:
+                    # 返回1表示登录失败，将数据库中的status改为异常
+                    g_var.logger.info('使用当前账号密码登录失败。。。')
+                    sql = "UPDATE " + present_website + " SET status=1 WHERE id=" + str(userInfo[0]) + ";"
+                    status = MysqlHandler().update(sql)
+                    if status == -1:
+                        return -1
+                    self.failed_count = self.failed_count + 1
+                    login_signal = 1
+                    break
+                elif loginData == 0:
+                    self.failed_count = self.failed_count + 1
+                    login_signal = 1
+                    break
+                elif loginData == -1:
                     # 代理问题，更换代理
                     g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
                     g_var.logger.info("代理错误")
                     retry_count = g_var.RETRY_COUNT_MAX
                 elif loginData == -2:
-                    # 账号异常，跳出本循环
+                    g_var.logger.info("登录失败，但可以使用此账户继续尝试，不跳出循环")
                     self.failed_count = self.failed_count + 1
-                    login_signal = 1
-                    break
+                    continue
                 else:
                     self.failed_count = 0
                     break
             if retry_count == g_var.RETRY_COUNT_MAX:
+                # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
-                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续登录失败！程序停止"
+                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续登录出错，程序停止"
+                g_var.logger.error("连续登录失败！程序停止")
                 break
             if login_signal == 1:
                 continue
@@ -1117,26 +1347,37 @@ class KnowyourmemeCom(object):
             # 3、发文章
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
+                time.sleep(g_var.SLEEP_TIME)
                 retry_count = retry_count + 1
                 status = self.__postMessage(Session, loginData, present_website)
-                if status == 0:  # 发文章成功
+                if status == 'ok':  # 发文章成功
                     self.success_count = self.success_count + 1
                     self.failed_count = 0
+                    break
+                elif status == 1:
+                    sql = "UPDATE " + present_website + " SET cookie='' WHERE id=" + str(loginData['id']) + ";"
+                    status = MysqlHandler().update(sql)
+                    if status == 0:
+                        g_var.logger.info("cookie失效，清除cookie update OK")
+                    else:
+                        g_var.logger.error("数据库清除cookie错误!")
+                    self.failed_count = self.failed_count + 1
+                    break
+                elif status == 0:
+                    self.failed_count = self.failed_count + 1
                     break
                 elif status == -1:
                     g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"
                     g_var.logger.info("代理错误")
                     retry_count = g_var.RETRY_COUNT_MAX
                 elif status == -2:
-                    # 某些必须停止的错误，程序停止
                     self.failed_count = self.failed_count + 1
-                    g_var.SPIDER_STATUS = 3
-                    break
+                    continue
                 elif status == -3:
                     self.failed_count = self.failed_count + 1
-                elif status == -4:
-                    # 返回值为-4，cookie过期，重新取值
-                    break
+                    proxies = ip_proxy(VPN)
+                    Session.proxies = proxies
+                    continue
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3

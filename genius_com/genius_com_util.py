@@ -76,10 +76,10 @@ def generate_register_data(authenticity_token):
     return registerData
 
 # 注册：获取authenticity_token、_csrf_token、_rapgenius_session值
-def get_authenticity_token_signup(Session):
+def get_authenticity_token_signup():
     try:
         url = 'https://genius.com/signup'
-        res = Session.get(url, timeout=g_var.TIMEOUT)
+        res = requestsW.get(url, proxies=ip_proxy('ch'), timeout=g_var.TIMEOUT, vpn='ch')
         if res == -1:
             return 0, 0, 0
         token_list = re.findall('name="authenticity_token" type="hidden" value="(.*?)" /></div>', res.text)
@@ -195,10 +195,10 @@ class GeniusCom(object):
             return -1
         return 0
 
-    def __register_one(self, Session):
+    def __register_one(self):
         g_var.logger.info("register。。。")
         # 获取authenticity_token、_csrf_token、_rapgenius_session值
-        authenticity_token, csrf_token, rapgenius_session = get_authenticity_token_signup(Session)
+        authenticity_token, csrf_token, rapgenius_session = get_authenticity_token_signup()
         if authenticity_token == 0:
             return -1
         elif authenticity_token == -1:
@@ -213,7 +213,7 @@ class GeniusCom(object):
         registerData = generate_register_data(authenticity_token)
         url_register = 'https://genius.com/account'
         g_var.logger.info("提交注册中。。。")
-        html = requests.post(url_register, data=registerData, headers=headers, timeout=g_var.TIMEOUT)
+        html = requestsW.post(url_register, proxies=ip_proxy("ch") , data=registerData, headers=headers, timeout=g_var.TIMEOUT, vpn='ch')
         if html == -1:
             return html
 
@@ -318,7 +318,7 @@ class GeniusCom(object):
         }
         return loginSuccessData
 
-    def __postMessage(self, Session, loginData):
+    def __postMessage(self, loginData):
 
         # 获取headers
         headers = generate_headers(2, loginData=loginData)
@@ -335,7 +335,7 @@ class GeniusCom(object):
 
         url_postLink = 'https://genius.com/api/users/'+str(loginData['user_id'])+'?text_format=html,markdown'
         g_var.logger.info("发送链接中...")
-        res = Session.put(url_postLink, headers=headers, json=data, timeout=g_var.TIMEOUT)
+        res = requestsW.put(url_postLink, proxies=ip_proxy("ch") , headers=headers, json=data, timeout=g_var.TIMEOUT, vpn='ch')
         if res == -1:
             return res
 
@@ -484,17 +484,12 @@ class GeniusCom(object):
             if self.__monitor_status() == -1:
                 break
             self.now_count = self.now_count + 1
-            # 设置Session对象
-            Session = get_Session(VPN)
-            if Session == -1:
-                self.failed_count = self.failed_count + 1
-                continue
             # 1、注册
             retry_count = 0
             register_signal = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
-                registerData = self.__register_one(Session)
+                registerData = self.__register_one()
                 if registerData == -1:
                     # 失败更换代理
                     g_var.ERR_CODE = 3003
@@ -525,7 +520,7 @@ class GeniusCom(object):
             retry_count = 0
             while retry_count < g_var.RETRY_COUNT_MAX:
                 retry_count = retry_count + 1
-                status = self.__postMessage(Session, registerData)
+                status = self.__postMessage(registerData)
                 if status == -1:
                     g_var.ERR_CODE = 3003
                     g_var.ERR_MSG = g_var.ERR_MSG + "|_|代理连续错误"

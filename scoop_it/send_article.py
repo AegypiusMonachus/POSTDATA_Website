@@ -55,7 +55,7 @@ if __name__ == "__main__":
     # 为每个对象开一个线程，加入到线程列表中统一管理
     t_list = []
     for i in range(0, len(obj_list)):
-        t = threading.Thread(target=obj_list[i].loginAndPostMessage, args=(VPN,))
+        t = threading.Thread(target=obj_list[i].loginAndPostMessage, args=(present_website, VPN))
         t_list.append(t)
 
     # 线程开始执行
@@ -79,7 +79,7 @@ if __name__ == "__main__":
     elif wait_signal == 1:
         # 不等待其他线程结束，直接停止
         g_var.logger.info("不等待其他线程结束，直接停止")
-    
+
     # 程序结束前，将全局变量g_var.USER_ID写入config.json
     current_id = {"currentId": g_var.USER_ID}
     with open(g_var.ENV_DIR+'/'+present_website+'/config.json', 'w') as f:

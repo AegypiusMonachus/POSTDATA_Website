@@ -4,8 +4,6 @@ from project_utils import g_var
 from project_utils.g_var import PROXY_ERR_MAX
 
 #封装requests库 自动换ip
-
-
 class Session(requests.Session):
     def __init__(self):
         super().__init__()
@@ -13,43 +11,63 @@ class Session(requests.Session):
         i = 1
         if "timeout" not in kwargs:
             kwargs["timeout"]=g_var.TIMEOUT
-
+        if "vpn" in kwargs:
+            vpn=kwargs.pop("vpn")
+        else:
+            vpn = "en"
         while i < PROXY_ERR_MAX:
-
-            if "proxies" in kwargs or self.proxies!={}:
-                g_var.logger.info("ip重试%s次," % i)
-                kwargs["proxies"] = ip_proxy("en")
             i += 1
             try:
                 return super().get(url, **kwargs)
-            except (ConnectTimeout, ReadTimeout):
-                pass
-            except (ConnectionError):
-                pass
-                # print(e)
             except Exception as e:
-                g_var.logger.info("未知错误"+ str(e))
+                if "proxies" in kwargs or self.proxies != {}:
+                    g_var.logger.info("ip重试%s次," % i)
+                    proxies=ip_proxy(vpn)
+                    kwargs["proxies"] = proxies
+                    self.proxies=proxies
         return -1
     def post(self, url, data=None, json=None, **kwargs):
         i = 1
         if "timeout" not in kwargs:
             kwargs["timeout"]=g_var.TIMEOUT
+        if "vpn" in kwargs:
+            vpn=kwargs.pop("vpn")
+        else:
+            vpn = "en"
+
         while i < PROXY_ERR_MAX:
-            if "proxies" in kwargs or self.proxies!={}:
-                g_var.logger.info("ip重试%s次," % i)
-                kwargs["proxies"] = ip_proxy("en")
+
             i += 1
             try:
                 return super().post(url, data=data, json=json, **kwargs)
-            except (ConnectTimeout, ReadTimeout):
-                pass
-            except (ConnectionError)as e:
-                pass
-                # print(e)
             except Exception as e:
-                g_var.logger.info("未知错误"+str(e) )
+                if "proxies" in kwargs or self.proxies != {}:
+                    g_var.logger.info("ip重试%s次," % i)
+                    proxies = ip_proxy(vpn)
+                    kwargs["proxies"] = proxies
+                    self.proxies = proxies
         return -1
 
+
+    def put(self, url, data=None, **kwargs):
+        i = 1
+        if "timeout" not in kwargs:
+            kwargs["timeout"]=g_var.TIMEOUT
+        if "vpn" in kwargs:
+            vpn=kwargs.pop("vpn")
+        else:
+            vpn = "en"
+        while i < PROXY_ERR_MAX:
+            i += 1
+            try:
+                return super().put(url, data=data,  **kwargs)
+            except Exception as e:
+                if "proxies" in kwargs or self.proxies != {}:
+                    g_var.logger.info("ip重试%s次," % i)
+                    proxies = ip_proxy(vpn)
+                    kwargs["proxies"] = proxies
+                    self.proxies = proxies
+        return -1
 
 
 def session():
@@ -63,19 +81,19 @@ def get(url, **kwargs):
     i=1
     if "timeout" not in kwargs:
         kwargs["timeout"] = g_var.TIMEOUT
+    if "vpn" in kwargs:
+        vpn=kwargs.pop("vpn")
+    else:
+        vpn = "en"
     while i<PROXY_ERR_MAX:
         i += 1
-        if i!=0 and "proxies" in kwargs:
-            g_var.logger.info("ip重试%s次:" % i)
-            kwargs["proxies"]=ip_proxy("en")
+
         try:
             return requests.get(url, **kwargs)
-        except (ConnectTimeout,ReadTimeout):
-            pass
-        except (ConnectionError)as e:
-            pass
         except Exception as e:
-            g_var.logger.info("未知错误"+str(e))
+            if "proxies" in kwargs:
+                g_var.logger.info("ip重试%s次:" % i)
+                kwargs["proxies"] = ip_proxy(vpn)
     return -1
 
 
@@ -84,20 +102,18 @@ def post(url, data=None, json=None, **kwargs):
     i=1
     if "timeout" not in kwargs:
         kwargs["timeout"] = g_var.TIMEOUT
+    if "vpn" in kwargs:
+        vpn=kwargs.pop("vpn")
+    else:
+        vpn = "en"
     while i<PROXY_ERR_MAX:
-        if i!=0 and "proxies" in kwargs:
-            g_var.logger.info("ip重试%s次:" % i)
-            kwargs["proxies"]=ip_proxy("en")
         i += 1
         try:
             return requests.post(url, data=data, json=json, **kwargs)
-        except (ConnectTimeout,ReadTimeout):
-            pass
-        except (ConnectionError)as e:
-            pass
-            # print(e)
         except Exception as e:
-            g_var.logger.info("未知错误"+str(e))
+            if "proxies" in kwargs:
+                g_var.logger.info("ip重试%s次:" % i)
+                kwargs["proxies"] = ip_proxy(vpn)
     return -1
 
 
@@ -105,19 +121,19 @@ def put(url, data=None, **kwargs):
     i=1
     if "timeout" not in kwargs:
         kwargs["timeout"] = g_var.TIMEOUT
+    if "vpn" in kwargs:
+        vpn=kwargs.pop("vpn")
+    else:
+        vpn = "en"
     while i<PROXY_ERR_MAX:
-        if i!=0 and "proxies" in kwargs:
-            g_var.logger.info("ip重试%s次:" % i)
-            kwargs["proxies"]=ip_proxy("en")
+
         i += 1
         try:
             return requests.put(url, data=data, **kwargs)
-        except (ConnectTimeout,ReadTimeout):
-            pass
-        except (ConnectionError)as e:
-            pass
         except Exception as e:
-            g_var.logger.info("未知错误"+str(e))
+            if "proxies" in kwargs:
+                g_var.logger.info("ip重试%s次:" % i)
+                kwargs["proxies"] = ip_proxy(vpn)
     return -1
 
 

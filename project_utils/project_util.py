@@ -177,7 +177,7 @@ class EmailVerify(object):
             if i == msgLen:
                 return ''
 
-    def parseBody(self,message):
+    def parseBody(self, message):
         """ 解析邮件/信体 """
         # 循环信件中的每一个mime的数据块
         res_text = ''
@@ -215,49 +215,46 @@ class EmailVerify(object):
             inbox_unseen = int(re.search('UNSEEN\s+(\d+)', str(inbox_y[0])).group(1))
             junk_unseen = int(re.search('UNSEEN\s+(\d+)', str(junk_y[0])).group(1))
             filename_list = []
-            if self.inbox_unread == inbox_unseen and self.junk_unread == junk_unseen:
-                self.inbox_unread = inbox_unseen
-                self.junk_unread = junk_unseen
-                return 0, 0, filename_list
-            if self.junk_unread < junk_unseen:
+            if self.junk_unread != junk_unseen:
                 self.junk_unread = junk_unseen
                 filename_list.append('junk')
-            if self.inbox_unread < inbox_unseen:
+            if self.inbox_unread != inbox_unseen:
                 self.inbox_unread = inbox_unseen
                 filename_list.append('INBOX')
+            self.inbox_unread = inbox_unseen
+            self.junk_unread = junk_unseen
             return inbox_unseen, junk_unseen, filename_list
         except:
-            return 0, 0, []
+            return 1, 1, ['junk','INBOX']
 
     def Start(self):
         result = {}
         inbox_unseen, junk_unseen, filename_list = self.UnseenEmailCount()
-        if inbox_unseen == 0 and junk_unseen == 0 and filename_list == []:
+        if inbox_unseen == 0 and junk_unseen == 0:
             result['msg'] = 'Read Failed'
             result['data'] = ''
             return result
         else:
-            for i in filename_list:
-                filename = i
-                print(filename)
-                msg=self.get_mail(filename)
-                if msg:
+            for filename in filename_list:
+                # 依次检查INBOX、JUNK文件夹，有新邮件就返回
+                msg = self.get_mail(filename)
+                if msg != "":
                     result['msg'] = 'Read Successfully'
                     result['data'] = msg
                     return result
-        return {'data': '', 'msg': 'Read Failed'}
-
+            result['msg'] = 'Read Failed'
+            result['data'] = ''
+            return result
 
     def execute_Start(self):
         read_times = 0
-        while read_times<60:
-            res = self.Start()
-            if "data" in res:
-                if res['data']:
-                    return res
+        while read_times < 60:
             read_times += 1
+            g_var.logger.info("正在检查邮箱%s,user:%s,pwd:%s" % (read_times, self.username, self.password))
+            res = self.Start()
+            if res['msg'] == 'Read Successfully':
+                return res
             time.sleep(2)
-        g_var.logger.info("正在检查邮箱%s,user:%s,pwd:%s" % (read_times, self.username, self.password))
         return -1
 
 
@@ -274,11 +271,14 @@ def account_activation(Session, email_verify_obj):
     res_email = email_verify_obj.execute_Start()
     g_var.logger.info(res_email)
 
-    if res_email['msg'] != 'Read Successfully':
-        g_var.logger.info('邮箱验证路由获取失败。。。')
-        return -1
+    if res_email != -1:
+        if res_email['msg'] != 'Read Successfully':
+            g_var.logger.info('邮箱验证路由获取失败。。。')
+            return -1
+        else:
+            return res_email['data']
     else:
-        return res_email['data']
+        return -1
 
 
 # 日志打印装饰器
@@ -322,14 +322,14 @@ def ip_proxy(vpn: str="en"):
         成功返回Session对象
         错误返回{"error": -1}
     """
-    get_article_interface_url = g_var.INTERFACE_HOST + "/v1/get/ip/?vpn=" + vpn
+    get_proxy_interface_url = g_var.INTERFACE_HOST + "/v1/get/ip/?vpn=" + vpn
     try:
-        # proxy = requests.get(url=get_article_interface_url, timeout=g_var.TIMEOUT).text
+        # proxy = requests.get(url=get_proxy_interface_url, timeout=g_var.TIMEOUT).text
         headers = {
             'Connection': 'close',
         }
         requests.adapters.DEFAULT_RETRIES = g_var.DEFAULT_RETRIES
-        with requests.get(url=get_article_interface_url, headers=headers, timeout=g_var.TIMEOUT) as r:
+        with requests.get(url=get_proxy_interface_url, headers=headers, timeout=g_var.TIMEOUT) as r:
             proxy = r.text
     except:
         g_var.ERR_CODE = 2001
@@ -374,6 +374,7 @@ def generate_random_string(min: int, max: int,
     Args:
         min：最小长度
         max：最大长度
+        seed: 要生成随机字符串的种子
     Returns:
         返回随机字符串random_str
     """
@@ -385,7 +386,7 @@ def generate_random_string(min: int, max: int,
     return random_str
 
 
-def generate_login_data(present_website: str,path="") -> list:
+def generate_login_data(present_website: str, path="") -> list:
     """
     获取登录数据
     定义一个id的全局变量，初始值为-1，如果为-1，就去读一下config.json，获取id值。之后所有登录都是对这个id操作，而不用再去读config.json
@@ -394,8 +395,8 @@ def generate_login_data(present_website: str,path="") -> list:
     Returns:
         成功返回数据库中返回的账户信息
     """
-    if path=="":
-        path=g_var.ENV_DIR + '/' + present_website + '/config.json'
+    if path == "":
+        path = g_var.ENV_DIR + '/' + present_website + '/config.json'
 
     if g_var.USER_ID == -1:
         # 如果g_var.USER_ID == -1，就让第一个线程去config.json中读取id值到全局变量g_var.USER_ID中
@@ -442,7 +443,7 @@ def get_email(present_website: str):
     Args:
         present_website:网站名
     Returns:
-        成功返回邮箱账号和密码
+        成功返回邮箱账号和密码 email_and_passwd[0]:user email_and_passwd[1]:pwd
         失败返回-1
     """
     get_email_interface_url = g_var.INTERFACE_HOST + "/v1/get/email/?url=" + present_website
@@ -650,6 +651,62 @@ def get_new_link():
 
     return link
 
+def get_text():
+    """
+    从接口获取纯文本
+    """
+    get_text_url = g_var.INTERFACE_HOST + "/v1/get/article_txt/"
+    retry_count = 0
+    while retry_count < g_var.RETRY_COUNT_MAX:
+        retry_count = retry_count + 1
+        try:
+            headers = {
+                'Connection': 'close',
+            }
+            requests.adapters.DEFAULT_RETRIES = g_var.DEFAULT_RETRIES
+            with requests.get(url=get_text_url, headers=headers, timeout=g_var.TIMEOUT) as r:
+                wenben = r.text
+            break
+        except:
+            time.sleep(g_var.SLEEP_TIME)
+            pass
+    if retry_count == g_var.RETRY_COUNT_MAX:
+        g_var.logger.error("无法从接口获取纯文本！")
+        g_var.ERR_CODE = 3004
+        g_var.ERR_MSG = g_var.ERR_MSG + "无法从接口获取纯文本！"
+        g_var.SPIDER_STATUS = 3
+        return -1
+
+    return wenben
+
+def get_keyword():
+    """
+    从接口获取关键字
+    """
+    get_keyword_url = g_var.INTERFACE_HOST + "/v1/get/keyword/"
+    retry_count = 0
+    while retry_count < g_var.RETRY_COUNT_MAX:
+        retry_count = retry_count + 1
+        try:
+            headers = {
+                'Connection': 'close',
+            }
+            requests.adapters.DEFAULT_RETRIES = g_var.DEFAULT_RETRIES
+            with requests.get(url=get_keyword_url, headers=headers, timeout=g_var.TIMEOUT) as r:
+                keyword = r.text
+            break
+        except:
+            time.sleep(g_var.SLEEP_TIME)
+            pass
+    if retry_count == g_var.RETRY_COUNT_MAX:
+        g_var.logger.error("无法从接口获取关键字！")
+        g_var.ERR_CODE = 3004
+        g_var.ERR_MSG = g_var.ERR_MSG + "无法从接口获取关键字！"
+        g_var.SPIDER_STATUS = 3
+        return -1
+
+    return keyword
+
 def get_new_title_and_link():
     # 从接口获取超链接和标题
     #return [0] title ,[1]link
@@ -678,45 +735,64 @@ def get_new_title_and_link():
 
     return titleAndLink
 
-def identify_captcha_1(present_website: str) -> str:
+
+def identify_captcha_1(Session, captcha_url: str, present_website: str):
     """
-    识别字母和数字的验证码
+    下载识别字母和数字的验证码
     :param
+        Session:Session
         present_website:当前网站名
     :return:
         验证码识别结果
+        -1: session代理连续错误
+        -2: 接口返回数据错误
     """
-    file_data = {
-        "key": (None, g_var.VERIFY_KEY1),
-        'file': ('chaptcha.png', open(g_var.ENV_DIR + '/captcha/' + present_website + '/' +
-                                      threading.currentThread().name + '.png', 'rb'))
-    }
-    url_answer = g_var.VERIFY_URL1 + "/in.php"
-    try:
-        res = requests.post(url=url_answer, files=file_data, timeout=g_var.TIMEOUT).text
-    except:
-        g_var.ERR_CODE = 2001
-        g_var.ERR_MSG = g_var.ERR_MSG + "|_|" + "无法连接验证码识别接口"
-        g_var.logger.error("无法连接验证码识别接口")
-        return "-1"
-    id_code = res.split("|")[1]
+    captcha = Session.get(captcha_url, timeout=g_var.TIMEOUT).content
+    if captcha == -1:
+        return -1
 
-    url_code = g_var.VERIFY_URL1 + "/res.php?key=" + g_var.VERIFY_KEY1 + "&action=get&id=" + id_code
-    try:
-        # r = requests.get(url=url_code, timeout=g_var.TIMEOUT).text
-
-        headers = {
-            'Connection': 'close',
+    print("写入图片")
+    with open(g_var.ENV_DIR + '/captcha/' + present_website + '/' + threading.currentThread().name + '.png',
+              'wb') as file:
+        file.write(captcha)
+    time.sleep(1)
+    print("读取图片")
+    with open(g_var.ENV_DIR + '/captcha/' + present_website + '/' + threading.currentThread().name + '.png',
+              'rb') as file:
+        file_data = {
+            "key": (None, g_var.VERIFY_KEY1),
+            'file': ('chaptcha.png', file)
         }
-        requests.adapters.DEFAULT_RETRIES = g_var.DEFAULT_RETRIES
-        with requests.get(url=url_code, headers=headers, timeout=g_var.TIMEOUT) as r:
-            text = r.text
-    except:
-        g_var.ERR_CODE = 2001
-        g_var.ERR_MSG = g_var.ERR_MSG + "|_|" + "无法获取验证码识别结果!"
-        g_var.logger.error("无法获取验证码识别结果!")
-        return "-1"
-    return text.split("|")[1]
+        url_answer = g_var.VERIFY_URL1 + "/in.php"
+        try:
+            res = requests.post(url=url_answer, files=file_data, timeout=g_var.TIMEOUT).text
+        except:
+            g_var.ERR_CODE = 2001
+            g_var.ERR_MSG = g_var.ERR_MSG + "|_|" + "无法连接验证码识别接口"
+            g_var.logger.error("无法连接验证码识别接口")
+            return -2
+        if len(res.split("|")) < 2:
+            g_var.logger.info(res)
+            return -2
+        id_code = res.split("|")[1]
+
+        url_code = g_var.VERIFY_URL1 + "/res.php?key=" + g_var.VERIFY_KEY1 + "&action=get&id=" + id_code
+        try:
+            headers = {
+                'Connection': 'close',
+            }
+            requests.adapters.DEFAULT_RETRIES = g_var.DEFAULT_RETRIES
+            with requests.get(url=url_code, headers=headers, timeout=g_var.TIMEOUT) as r:
+                text = r.text
+                if text != -1:
+                    return text.split("|")[1]
+                else:
+                    return -2
+        except:
+            g_var.ERR_CODE = 2001
+            g_var.ERR_MSG = g_var.ERR_MSG + "|_|" + "无法获取验证码识别结果!"
+            g_var.logger.error("无法获取验证码识别结果!")
+            return -2
 
 
 def google_captcha(Session, googlekey, pageurl):
@@ -734,24 +810,35 @@ def google_captcha(Session, googlekey, pageurl):
         'pageurl': pageurl,
     }
     url_captcha = g_var.VERIFY_URL2 + '/in.php'
-    res = requests.get(url_captcha, params=data)
+    try:
+        res = requests.get(url_captcha, params=data)
+    except:
+        g_var.logger.info("打码平台请求失败")
+        return -1
     if "|" not in res.text:
         g_var.logger.info("谷歌验证出现问题" + str(res.text))
         return -1
     id_code = res.text.split("|")[1]
     url_code = g_var.VERIFY_URL2 + "/res.php?key=" + g_var.VERIFY_KEY2 + "&action=get&id=" + id_code
     while True:
-        r = requests.get(url_code, timeout=g_var.TIMEOUT)
-        if r.text == "CAPCHA_NOT_READY":
-            g_var.logger.info("谷歌人机验证，等待15s"+r.text)
-            time.sleep(15)
-        else:
-            if "|" in r.text:
-                g_var.logger.info("谷歌人机验证，成功:" + r.text.split("|")[1])
-                return r.text.split("|")[1]
+        try:
+            r = requestsW.get(url_code, timeout=g_var.TIMEOUT)
+        except:
+            g_var.logger.info("打码平台请求成功，查询可用key值失败")
+            return -1
+        if r != -1:
+            if r.text == "CAPCHA_NOT_READY":
+                g_var.logger.info("谷歌人机验证，等待15s"+r.text)
+                time.sleep(15)
             else:
-                g_var.logger.info("谷歌人机验证，出现问题:" + r.text)
-                return -1
+                if "|" in r.text:
+                    g_var.logger.info("谷歌人机验证，成功:" + r.text.split("|")[1])
+                    return r.text.split("|")[1]
+                else:
+                    g_var.logger.info("谷歌人机验证，出现问题:" + r.text)
+                    return -1
+        else:
+            return -1
 
 
 def task_dispatch():

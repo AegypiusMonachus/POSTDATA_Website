@@ -1,183 +1,89 @@
-import requests
 import json
-import re
+import time
+import threading
+import sys
+sys.path.append('./')                 # 在SendArticle目录执行
+sys.path.append('/home/web_python/project/SendArticle')
 
-from requests_toolbelt.multipart.encoder import MultipartEncoder
-from util import create_boundary, create_user
+import psutil
+from sbnation_com.sbnation_com_util import SbnationCom
+from project_utils.project_util import get_command_line_arguments, get_global_params, send_spider_status, \
+    send_spider_block_status, MysqlHandler
+from project_utils import g_var
 
-# 获取session_id
-def get_session_id():
-    headers = {
-        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.113 Safari/537.36',
-    }
-    url = 'https://auth.voxmedia.com/login?return_to=https://www.sbnation.com/'
-    res = requests.get(url, headers=headers, verify=False)
-    str_session = res.headers['Set-Cookie']
-    if not str_session:
-        print('获取Set-Cookie值失败。。。')
-        return -1
-    list_session = str_session.split(';')
-    if not list_session:
-        print('获取_session_id值失败。。。')
-        return -1
-    return list_session[0]
 
-# 获取超链接和标题
-def get_title_link():
-    url = 'http://192.168.31.234:8080/v1/get/title_or_link/'
-    res = requests.get(url, verify=False)
-    if not res.text:
-        print('标题和链接获取失败。。。')
-        return -1
-    title_link = res.text.split('|_|')
-    return title_link
+if __name__ == "__main__":
 
-def login():
-    session_id = get_session_id()
-    if session_id == -1:
-        print('未得到session_id值。。。')
-        return -1
-    headers = {
-        'Accept': 'application/json, text/javascript, */*; q=0.01',
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'Host': 'auth.voxmedia.com',
-        'Origin': 'https://auth.voxmedia.com',
-        'Referer': 'https://auth.voxmedia.com/login?return_to=https://www.sbnation.com/',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.113 Safari/537.36',
-        'Cookie': session_id,
-        'X-Requested-With': 'XMLHttpRequest',
-    }
-    data = {
-        'username': 'WtcAIT1vqQ',
-        'password': 'QCLNte8VSk',
-        'remember_me': 'false',
-        'g-recaptcha-response': '',
-    }
-    url = 'https://auth.voxmedia.com/chorus_auth/initiate_password_auth.json'
-    res = requests.post(url, data=data, headers=headers, verify=False)
-    res_data = json.loads(res.text)
-    if res_data['logged_in']:
-        print('登陆成功。。。')
-        session_id_article = re.findall('_session_id=(.*?);', res.headers['Set-Cookie'])
-        authenticity_token, session_id = get_authenticity_token(session_id_article[0], data['username'])
-        if authenticity_token == -1 or session_id == -1:
-            print('未获取到authenticity_token或者session_id值。。。')
-            return -1
-        res_send = send_article(session_id, authenticity_token, data['username'])
-        if res_send == -1:
-            print('个人资料页网址修改失败。。。')
-        return 0
-    print('登陆失败。。。')
-    return -1
+    present_website = "sbnation_com"
+    VPN = "en"
 
-# 获取authenticity_token用于修改个人网址
-def get_authenticity_token(session_id_article, name):
-    headers = {
-        'Host': 'www.sbnation.com',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.122 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
-        'Referer': 'https://www.sbnation.com/users/'+name,
-        'Cookie': '_session_id='+session_id_article,
-    }
-    url = 'https://www.sbnation.com/users/'+name+'/edit_profile'
-    res = requests.get(url, headers=headers, verify=False)
-    token_list = re.findall('name="authenticity_token" value="(.*?)" />', res.text)
-    if not token_list:
-        print('获取authenticity_token失败。。。')
-        return -1, -1
-    session_list = re.findall('_session_id=(.*?);', res.headers['Set-Cookie'])
-    if not session_list:
-        print('获取session_id失败。。。')
-        return -1, -1
-    return token_list[0], session_list[0]
+    # 获取命令行传入参数
+    args = get_command_line_arguments()
+    g_var.ALL_COUNT = int(args.count)
+    g_var.INTERFACE_HOST = args.host
+    g_var.UUID = args.uuid
 
-# 修改个人资料页中的个人网址
-def send_article(session_id_article, authenticity_token, name):
-    headers = {
-        'Host': 'www.sbnation.com',
-        'Origin': 'https://www.sbnation.com',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.122 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
-        'Referer': 'https://www.sbnation.com/users/'+name+'/edit_profile',
-        'Cookie': '_session_id='+session_id_article,
-    }
-    title_link = get_title_link()
-    print(title_link)
-    if title_link == -1:
-        print('未获取到标题和链接。。。')
-        return -1
-    multipart_encoder = MultipartEncoder(
-        fields={
-            'utf8': '✓',
-            '_method': 'patch',
-            'authenticity_token': authenticity_token,
-            'profile_image[filename]': ('', '', 'application/octet-stream'),
-            'profile_image[filename_cache]': '',
-            'network_membership[bio]': '',
-            'network_membership[signature]': '',
-            'network_membership[public_email]': '',
-            'network_membership[website_name]': title_link[0],
-            'network_membership[website_url]': title_link[1],
-            'network_membership[facebook_page_url]': '',
-            'network_membership[facebook_page_url]': '',
-            'network_membership[network_membership_items_attributes][0][key]': 'MLB',
-            'network_membership[network_membership_items_attributes][0][value]': '',
-            'network_membership[network_membership_items_attributes][1][key]': 'NFL',
-            'network_membership[network_membership_items_attributes][1][value]': '',
-            'network_membership[network_membership_items_attributes][2][key]': 'NBA',
-            'network_membership[network_membership_items_attributes][2][value]': '',
-            'network_membership[network_membership_items_attributes][3][key]': 'NHL',
-            'network_membership[network_membership_items_attributes][3][value]': '',
-            'network_membership[network_membership_items_attributes][4][key]': 'NCAAF',
-            'network_membership[network_membership_items_attributes][4][value]': '',
-            'network_membership[network_membership_items_attributes][5][key]': 'NCAAB',
-            'network_membership[network_membership_items_attributes][5][value]': '',
-            'network_membership[network_membership_items_attributes][6][key]': 'MMA',
-            'network_membership[network_membership_items_attributes][6][value]': '',
-            'network_membership[network_membership_items_attributes][7][key]': 'Golf',
-            'network_membership[network_membership_items_attributes][7][value]': '',
-            'network_membership[network_membership_items_attributes][8][key]': 'NASCAR',
-            'network_membership[network_membership_items_attributes][8][value]': '',
-            'network_membership[network_membership_items_attributes][9][key]': 'Boxing',
-            'network_membership[network_membership_items_attributes][9][value]': '',
-            'network_membership[network_membership_items_attributes][10][key]': 'Soccer',
-            'network_membership[network_membership_items_attributes][10][value]': '',
-            'network_membership[network_membership_items_attributes][11][key]': 'MLS',
-            'network_membership[network_membership_items_attributes][11][value]': '',
-            'network_membership[network_membership_items_attributes][12][key]': 'EPL',
-            'network_membership[network_membership_items_attributes][12][value]': '',
-            'network_membership[network_membership_items_attributes][13][key]': 'Football League Championship',
-            'network_membership[network_membership_items_attributes][13][value]': '',
-            'network_membership[network_membership_items_attributes][14][key]': 'FIFA',
-            'network_membership[network_membership_items_attributes][14][value]': '',
-            'network_membership[network_membership_items_attributes][15][key]': 'Bundesliga',
-            'network_membership[network_membership_items_attributes][15][value]': '',
-            'network_membership[network_membership_items_attributes][16][key]': 'Serie A',
-            'network_membership[network_membership_items_attributes][16][value]': '',
-            'network_membership[network_membership_items_attributes][17][key]': 'La Liga',
-            'network_membership[network_membership_items_attributes][17][value]': '',
-            'network_membership[network_membership_items_attributes][18][key]': 'Cycling',
-            'network_membership[network_membership_items_attributes][18][value]': '',
-            'network_membership[network_membership_items_attributes][19][key]': 'Tennis',
-            'network_membership[network_membership_items_attributes][19][value]': '',
-            'network_membership[network_membership_items_attributes][20][key]': 'General',
-            'network_membership[network_membership_items_attributes][20][value]': '',
-            'commit': 'Update',
-        },
-        boundary='----WebKitFormBoundary' + create_boundary(),
-    )
-    headers['Content-Type'] = multipart_encoder.content_type
+    # 获取配置参数
+    get_global_params(present_website)
 
-    url = 'https://www.sbnation.com/users/'+name+'/update_profile'
-    res = requests.post(url, data=multipart_encoder, headers=headers, verify=False)
-    print(res.status_code)
-    if res.status_code != 200:
-        print('修改个人资料页的网址失败。。。')
-        return -1
-    return 0
+    # 检查cpu和内存状态
+    while psutil.virtual_memory().percent > g_var.RAM_MAX or psutil.cpu_percent(None) > g_var.CPU_MAX:
+        g_var.logger.info("cpu或内存不足，挂起"+str(g_var.SEND_STATUS_INTERVAL)+"s")
+        g_var.SPIDER_STATUS = 1
+        close_signal = send_spider_block_status()
+        if close_signal == 1:
+            quit()
+        time.sleep(g_var.SEND_STATUS_INTERVAL)
 
-if __name__ == '__main__':
-    login()
-    # get_session_id()
-    # get_title_link()
+    # 开始执行程序
+    g_var.SPIDER_STATUS = 2
+
+    # 考虑平均分配不是正好分的情况:例如94个任务分配给10个线程，先94/10取整，每个线程9个任务，剩余4个任务给前4个线程每个加1个任务
+    EACH_THREAD_ASSIGNMENT_NUM = int(g_var.ALL_COUNT / g_var.THREAD_COUNT)  # 每个线程分配的基本任务数量
+    ADD_ONE_ASSIGNMENT_THREAD_NUM = g_var.ALL_COUNT % g_var.THREAD_COUNT    # 需要增加一个任务的线程个数
+    REMAIN_THREAD_NUM = g_var.THREAD_COUNT - ADD_ONE_ASSIGNMENT_THREAD_NUM  # 剩余不用增加任务的线程个数
+    g_var.logger.info("EACH_THREAD_ASSIGNMENT_NUM" + str(EACH_THREAD_ASSIGNMENT_NUM))
+
+    # 创建一个对象列表
+    obj_list = []
+    for i in range(0, ADD_ONE_ASSIGNMENT_THREAD_NUM):
+        obj_list.append(SbnationCom(EACH_THREAD_ASSIGNMENT_NUM + 1))
+    if EACH_THREAD_ASSIGNMENT_NUM != 0:
+        for i in range(0, REMAIN_THREAD_NUM):
+            obj_list.append(SbnationCom(EACH_THREAD_ASSIGNMENT_NUM))
+
+    # 为每个对象开一个线程，加入到线程列表中统一管理
+    t_list = []
+    for i in range(0, len(obj_list)):
+        t = threading.Thread(target=obj_list[i].loginAndPostMessage, args=(present_website, VPN))
+        t_list.append(t)
+
+    # 线程开始执行
+    for i in range(0, len(t_list)):
+        t_list[i].setDaemon(True)
+        t_list[i].start()
+
+    # 定时发送状态
+    close_send_status_signal = 0  # 发送消息的循环要等所有线程停止才能跳出循环
+    wait_signal = 0
+
+    while g_var.SPIDER_STATUS != 3 or close_send_status_signal != 1:
+        close_send_status_signal, wait_signal = send_spider_status(obj_list, t_list)
+        time.sleep(g_var.SEND_STATUS_INTERVAL)
+
+    if wait_signal == 0:
+        # 等待所有线程结束
+        g_var.logger.info("等待所有线程结束")
+        for i in range(0, len(t_list)):
+            t_list[i].join()
+    elif wait_signal == 1:
+        # 不等待其他线程结束，直接停止
+        g_var.logger.info("不等待其他线程结束，直接停止")
+
+    # 程序结束前，将全局变量g_var.USER_ID写入config.json
+    current_id = {"currentId": g_var.USER_ID}
+    with open(g_var.ENV_DIR+'/'+present_website+'/config.json', 'w') as f:
+        json.dump(current_id, f)
+
+    MysqlHandler().dbclose()     # 关闭数据库
+    g_var.logger.info("主线程结束！共计完成" + str(g_var.SUCCESS_COUNT) + "个\n\n\n\n\n")

@@ -547,7 +547,7 @@ class WattpadCom(object):
             if retry_count == g_var.RETRY_COUNT_MAX:
                 # 连续出错说明发生了一些问题，需要停止程序
                 g_var.SPIDER_STATUS = 3
-                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续注册出错，程序停止"
+                g_var.ERR_MSG = g_var.ERR_MSG + "|_|连续发链接出错，程序停止"
                 g_var.logger.error("连续发链接出错，程序停止")
                 break
         g_var.logger.info("成功注册账户并发送链接" + str(self.success_count) + "个。")

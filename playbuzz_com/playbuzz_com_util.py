@@ -54,14 +54,13 @@ def generate_headers(signal, accessToken=None, item_id=None):
         headers = {
             'Host': 'editor.ex.co',
             'Accept': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.163 Safari/537.36',
+            'User-Agent': user_agent,
             'Content-Type': 'application/json',
             'Origin': 'https://app.ex.co',
             'Referer': 'https://app.ex.co/create/item/' + item_id + '/complete',
             'Cookie': 'PlaybuzzToken=' + accessToken,
         }
     return headers
-
 
 # 获取k值，用于得到人机身份验证返回码
 def get_googlekey():
@@ -83,7 +82,6 @@ def get_googlekey():
         g_var.logger.info(e)
         return -1
 
-
 def generate_register_data(email_info, captcha_value):
     # 生成注册数据返回
     try:
@@ -104,7 +102,6 @@ def generate_register_data(email_info, captcha_value):
         g_var.logger.info(e)
         return -1
     return registerData
-
 
 #  获取文章内容
 def get_article():
@@ -148,7 +145,6 @@ def get_article():
         g_var.logger.info("获取对应文章格式内容出现异常...")
         g_var.logger.info(e)
         return -1, -1
-
 
 def generate_post_article_data(loginData, item_id, sections_id, captcha_value, title, ops):
     # 生成注册数据返回
@@ -217,7 +213,6 @@ def generate_post_article_data(loginData, item_id, sections_id, captcha_value, t
         return -1
     return article_data
 
-
 class PlaybuzzCom(object):
     def __init__(self, assignment_num):
         self.assignment_num = assignment_num  # 分配任务的数量
@@ -269,6 +264,8 @@ class PlaybuzzCom(object):
             return -1
 
         captcha_value = google_captcha("", googlekey, url_register_one)
+        if captcha_value == -1:
+            return -2
         registerData = generate_register_data(email_info, captcha_value)
 
         g_var.logger.info("提交注册中...")
@@ -305,7 +302,7 @@ class PlaybuzzCom(object):
             return -2
         # 将注册的账户写入数据库
         try:
-            sql = "INSERT INTO " + present_website + "(firstName, password, mail, cookie, userId) VALUES('" + \
+            sql = "INSERT INTO " + present_website + "(username, password, mail, cookie, userId) VALUES('" + \
                   registerData['firstName'] + "', '" + registerData['password'] + "', '" + email_info[0] + "', '" + accessToken + "', '" + str(
                 userId) + "');"
             last_row_id = MysqlHandler().insert(sql)
@@ -375,6 +372,8 @@ class PlaybuzzCom(object):
             g_var.logger.info("获取headers失败...")
             return -1
         captcha_value = google_captcha('', googlekey, url_login)
+        if captcha_value == -1:
+            return -2
         loginData = {
             "email": userInfo[3],
             "password": userInfo[2],
@@ -435,13 +434,15 @@ class PlaybuzzCom(object):
         g_var.logger.info('post article......')
         item_id = str(uuid.uuid4())
         sections_id = str(uuid.uuid4())
+        g_var.logger.info('正在获取headers。。。')
         headers = generate_headers(2, loginData['cookie'], item_id)
-        if headers == -1:
+        if headers == -1 or loginData['cookie']=="":
             g_var.logger.info("获取headers失败...")
             return -1
-
         captcha_url = 'https://app.ex.co/create/new/preview'
         captcha_value = google_captcha('', googlekey, captcha_url)
+        if captcha_value == -1:
+            return -2
         title, ops = get_article()
         if title == -1 or ops == -1:
             g_var.logger.info("未能获取对应文章格式内容...")
@@ -475,7 +476,7 @@ class PlaybuzzCom(object):
             return -1
         try:
             url = 'https://app.ex.co/stories/item/' + item_id
-            sql = "INSERT INTO playbuzz_com_article(url, user_id) VALUES('" + url + "', '" + str(loginData["id"]) + "');"
+            sql = "INSERT INTO playbuzz_com_article(url, keyword, user_id) VALUES('" + url + "', '" + title + "', '" + str(loginData["id"]) + "');"
             last_row_id = MysqlHandler().insert(sql)
             g_var.logger.info(last_row_id)
             if last_row_id != -1:
@@ -554,7 +555,7 @@ class PlaybuzzCom(object):
             userInfo = generate_login_data(present_website)
             g_var.logger.info(userInfo)
             if userInfo == None:
-                g_var.ERR_CODE = 2001
+                g_var.ERR_CODE = 2003
                 g_var.ERR_MSG = g_var.ERR_MSG + "无法获取正常用户!"
                 g_var.logger.error("数据库中获取用户失败，本线程停止！")
                 return -1

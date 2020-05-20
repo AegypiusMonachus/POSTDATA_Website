@@ -8,8 +8,7 @@ import time
 import requests
 from requests.adapters import HTTPAdapter
 
-from project_utils.project_util import generate_random_string, ip_proxy, get_new_article, MysqlHandler, \
-    identify_captcha_1
+from project_utils.project_util import generate_random_string, ip_proxy, get_new_article, MysqlHandler
 from project_utils import g_var
 
 
@@ -177,6 +176,50 @@ def get_article_url(Session, username: str):
     return article_url
 
 
+def identify_captcha_1(present_website: str):
+    """
+    下载识别字母和数字的验证码
+    :param
+        Session:Session
+        present_website:当前网站名
+    :return:
+        验证码识别结果
+    """
+
+    file_data = {
+        "key": (None, g_var.VERIFY_KEY1),
+        'file': ('chaptcha.png', open(g_var.ENV_DIR + '/captcha/' + present_website + '/' +
+                                      threading.currentThread().name + '.png', 'rb'))
+    }
+    url_answer = g_var.VERIFY_URL1 + "/in.php"
+    try:
+        res = requests.post(url=url_answer, files=file_data, timeout=g_var.TIMEOUT).text
+    except:
+        g_var.ERR_CODE = 2001
+        g_var.ERR_MSG = g_var.ERR_MSG + "|_|" + "无法连接验证码识别接口"
+        g_var.logger.error("无法连接验证码识别接口")
+        return -1
+    id_code = res.split("|")[1]
+
+    url_code = g_var.VERIFY_URL1 + "/res.php?key=" + g_var.VERIFY_KEY1 + "&action=get&id=" + id_code
+    try:
+        headers = {
+            'Connection': 'close',
+        }
+        requests.adapters.DEFAULT_RETRIES = g_var.DEFAULT_RETRIES
+        with requests.get(url=url_code, headers=headers, timeout=g_var.TIMEOUT) as r:
+            text = r.text
+            if text != -1:
+                return text.split("|")[1]
+            else:
+                return -1
+    except:
+        g_var.ERR_CODE = 2001
+        g_var.ERR_MSG = g_var.ERR_MSG + "|_|" + "无法获取验证码识别结果!"
+        g_var.logger.error("无法获取验证码识别结果!")
+        return -1
+
+
 class MeeNu(object):
     def __init__(self, assignment_num):
         self.assignment_num = assignment_num    # 分配任务的数量
@@ -213,7 +256,7 @@ class MeeNu(object):
 
         # 识别验证码
         captcha_code = identify_captcha_1(present_website)
-        if captcha_code == "-1":
+        if captcha_code == -1:
             g_var.logger.info("识别验证码失败")
             return -1
         g_var.logger.info("captcha_code:" + captcha_code)
